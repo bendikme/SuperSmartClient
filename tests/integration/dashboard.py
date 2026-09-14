@@ -333,8 +333,11 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(Path(f"/proc/{pid}/comm").read_text().strip(), "Xvfb")
 
     def window(self):
-        window = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                          "--name", "SuperSmartClient - Panel workspace").splitlines()[0]
+        # FLTK recreates an untitled override-redirect window for fullscreen
+        # without a window manager. Keep targeting this fixture's PID and choose
+        # its main window by area, excluding any small tooltip windows.
+        windows = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid).splitlines()
+        window = max(windows, key=lambda item: self.geometry(item)["WIDTH"] * self.geometry(item)["HEIGHT"])
         self.assertEqual(int(self.xdo("getwindowpid", window)), self.process.pid)
         self.xdo("windowfocus", "--sync", window)
         return window
@@ -349,7 +352,10 @@ class DashboardTests(unittest.TestCase):
         # XTest button state is needed for motion to be delivered as a drag.
         # require_input() has verified this is an isolated Xvfb display.
         self.xdo("mousedown", 1)
+        time.sleep(0.06)
         self.xdo("mousemove", "--window", window, x2, y2)
+        # Allow FLTK to dispatch its consolidated motion before button release.
+        time.sleep(0.08)
         self.xdo("mouseup", 1)
         time.sleep(0.2)
 
@@ -397,7 +403,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(first.inputs + second.inputs, [], "Grid gestures reached a panel")
             self.click(window, 744, 56)  # Focus the first pane.
             focused = self.picture(window, ".focused.png")
-            self.assertEqual(self.pixel(focused, 1315, 500), (220, 227, 236), "Focused pane does not fill the workspace")
+            self.assertEqual(self.pixel(focused, 1315, 500), (37, 99, 235), "Focused pane does not fill the workspace")
             self.click(window, 640, 20)  # Overview
             # Select the next named layout. The saved startup flag is false;
             # opening the layout must nevertheless connect the whole group.

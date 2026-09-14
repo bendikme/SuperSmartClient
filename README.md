@@ -128,7 +128,7 @@ preset differs from the connected panel.
 
 ### Export and import
 
-**Layouts... > Export database...** exports every named layout to a `.sscdb` file.
+**Layouts > Export database...** exports every named layout to a `.sscdb` file.
 With **Include saved passwords** checked, supply an export password of at least
 eight characters. The complete portable database is encrypted and authenticated
 using AES-256-GCM with a random salt/nonce and PBKDF2-HMAC-SHA256 (600,000
