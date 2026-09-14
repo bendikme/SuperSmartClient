@@ -41,7 +41,10 @@ namespace rdr {
 namespace rfb {
   class CSecurityTLS : public CSecurity {
   public:
-    CSecurityTLS(CConnection* cc, bool _anon);
+    enum class Handshake { VeNCrypt, Direct };
+
+    CSecurityTLS(CConnection* cc, bool _anon,
+                 Handshake handshake = Handshake::VeNCrypt);
     virtual ~CSecurityTLS();
     bool processMsg() override;
     int getType() const override { return anon ? secTypeTLSNone : secTypeX509None; }
@@ -62,6 +65,7 @@ namespace rfb {
     gnutls_anon_client_credentials_t anon_cred;
     gnutls_certificate_credentials_t cert_cred;
     bool anon;
+    Handshake handshake;
 
     rdr::TLSSocket* tlssock;
 

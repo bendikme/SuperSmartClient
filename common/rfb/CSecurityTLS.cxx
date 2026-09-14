@@ -71,10 +71,10 @@ static const char* configdirfn(const char* fn)
   return full_path;
 }
 
-CSecurityTLS::CSecurityTLS(CConnection* cc_, bool _anon)
+CSecurityTLS::CSecurityTLS(CConnection* cc_, bool _anon, Handshake handshake_)
   : CSecurity(cc_), session(nullptr),
     anon_cred(nullptr), cert_cred(nullptr),
-    anon(_anon), tlssock(nullptr),
+    anon(_anon), handshake(handshake_), tlssock(nullptr),
     rawis(nullptr), rawos(nullptr)
 {
   int err = gnutls_global_init();
@@ -131,11 +131,13 @@ bool CSecurityTLS::processMsg()
   if (!session) {
     int ret;
 
-    if (!is->hasData(1))
-      return false;
+    if (handshake == Handshake::VeNCrypt) {
+      if (!is->hasData(1))
+        return false;
 
-    if (is->readU8() == 0)
-      throw protocol_error("Server failed to initialize TLS session");
+      if (is->readU8() == 0)
+        throw protocol_error("Server failed to initialize TLS session");
+    }
 
     ret = gnutls_init(&session, GNUTLS_CLIENT);
     if (ret != GNUTLS_E_SUCCESS)
@@ -163,6 +165,11 @@ bool CSecurityTLS::processMsg()
 
   vlog.debug("TLS handshake completed with %s",
              gnutls_session_get_desc(session));
+
+  // Finish the direct TLS exchange before a certificate dialog can block
+  // the event loop. No application data is sent before verification.
+  if (handshake == Handshake::Direct)
+    os->cork(false);
 
   checkSession();
 

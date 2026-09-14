@@ -37,6 +37,10 @@
 #include <rfb/CMsgReader.h>
 #include <rfb/CMsgWriter.h>
 #include <rfb/CSecurity.h>
+#include <rfb/CSecurityVncAuth.h>
+#ifdef HAVE_GNUTLS
+#include <rfb/CSecurityTLS.h>
+#endif
 #include <rfb/Cursor.h>
 #include <rfb/Decoder.h>
 #include <rfb/KeysymStr.h>
@@ -64,6 +68,7 @@ CConnection::CConnection()
   : csecurity(nullptr),
     supportsLocalCursor(false), supportsCursorPosition(false),
     supportsDesktopResize(false), supportsLEDState(false),
+    siemensTLS(nullptr), siemensTLSEnabled(false), inputEnabled(true),
     is(nullptr), os(nullptr), reader_(nullptr), writer_(nullptr),
     shared(false),
     state_(RFBSTATE_UNINITIALISED),
@@ -93,6 +98,20 @@ void CConnection::setStreams(rdr::InStream* is_, rdr::OutStream* os_)
 {
   is = is_;
   os = os_;
+}
+
+void CConnection::setSiemensTLS(bool enabled)
+{
+  if (state_ != RFBSTATE_UNINITIALISED)
+    throw std::logic_error("Cannot change TLS mode after connection starts");
+  siemensTLSEnabled = enabled;
+}
+
+void CConnection::setInputEnabled(bool enabled)
+{
+  if (state_ != RFBSTATE_UNINITIALISED)
+    throw std::logic_error("Cannot change input policy after connection starts");
+  inputEnabled = enabled;
 }
 
 void CConnection::setFramebuffer(ModifiablePixelBuffer* fb)
@@ -150,6 +169,7 @@ bool CConnection::processMsg()
   switch (state_) {
 
   case RFBSTATE_PROTOCOL_VERSION: return processVersionMsg();        break;
+  case RFBSTATE_SIEMENS_TLS:      return processSiemensTLSMsg();     break;
   case RFBSTATE_SECURITY_TYPES:   return processSecurityTypesMsg();  break;
   case RFBSTATE_SECURITY:         return processSecurityMsg();       break;
   case RFBSTATE_SECURITY_RESULT:  return processSecurityResultMsg(); break;
@@ -170,13 +190,28 @@ bool CConnection::processVersionMsg()
   char verStr[27]; // FIXME: gcc has some bug in format-overflow
   int majorVersion;
   int minorVersion;
+  bool siemens = false;
 
   vlog.debug("Reading protocol version");
 
   if (!is->hasData(12))
     return false;
 
+  is->setRestorePoint();
   is->readBytes((uint8_t*)verStr, 12);
+  if (memcmp(verStr, "VNC OVER SSL", 12) == 0) {
+    if (!siemensTLSEnabled) {
+      is->clearRestorePoint();
+      state_ = RFBSTATE_INVALID;
+      throw protocol_error("Server requires Siemens certificate TLS support");
+    }
+    // The prefix and version may arrive in separate TCP fragments.
+    if (!is->hasDataOrRestore(12))
+      return false;
+    is->readBytes((uint8_t*)verStr, 12);
+    siemens = true;
+  }
+  is->clearRestorePoint();
   verStr[12] = '\0';
 
   if (sscanf(verStr, "RFB %03d.%03d\n",
@@ -204,16 +239,44 @@ bool CConnection::processVersionMsg()
     server.setVersion(3,8);
   }
 
-  sprintf(verStr, "RFB %03d.%03d\n",
-          server.majorVersion, server.minorVersion);
-  os->writeBytes((const uint8_t*)verStr, 12);
-  os->flush();
-
-  state_ = RFBSTATE_SECURITY_TYPES;
+  if (siemens) {
+#ifdef HAVE_GNUTLS
+    vlog.info("Siemens VNC OVER SSL: starting certificate TLS before RFB reply");
+    siemensTLS = new CSecurityTLS(this, false, CSecurityTLS::Handshake::Direct);
+    state_ = RFBSTATE_SIEMENS_TLS;
+#else
+    state_ = RFBSTATE_INVALID;
+    throw protocol_error("Siemens TLS requires a build with GnuTLS support");
+#endif
+  } else {
+    writeVersion();
+    state_ = RFBSTATE_SECURITY_TYPES;
+  }
 
   vlog.info("Using RFB protocol version %d.%d",
             server.majorVersion, server.minorVersion);
 
+  return true;
+}
+
+void CConnection::writeVersion()
+{
+  char verStr[27]; // Same format-overflow workaround as processVersionMsg().
+  sprintf(verStr, "RFB %03d.%03d\n",
+          server.majorVersion, server.minorVersion);
+  os->writeBytes((const uint8_t*)verStr, 12);
+  os->flush();
+}
+
+bool CConnection::processSiemensTLSMsg()
+{
+  if (!siemensTLS->processMsg())
+    return false;
+
+  // CSecurityTLS has verified the certificate and replaced the streams.
+  // The client version and all authentication data now travel inside TLS.
+  writeVersion();
+  state_ = RFBSTATE_SECURITY_TYPES;
   return true;
 }
 
@@ -225,7 +288,10 @@ bool CConnection::processSecurityTypesMsg()
   int secType = secTypeInvalid;
 
   std::list<uint8_t> secTypes;
-  secTypes = security.GetEnabledSecTypes();
+  if (siemensTLS)
+    secTypes = {secTypeVncAuth};
+  else
+    secTypes = security.GetEnabledSecTypes();
 
   if (server.isVersion(3,3)) {
 
@@ -298,7 +364,10 @@ bool CConnection::processSecurityTypesMsg()
   }
 
   state_ = RFBSTATE_SECURITY;
-  csecurity = security.GetCSecurity(this, secType);
+  if (siemensTLS)
+    csecurity = new CSecurityVncAuth(this);
+  else
+    csecurity = security.GetCSecurity(this, secType);
 
   return true;
 }
@@ -382,7 +451,7 @@ void CConnection::securityCompleted()
 {
   state_ = RFBSTATE_INITIALISATION;
   reader_ = new CMsgReader(this, is);
-  writer_ = new CMsgWriter(&server, os);
+  writer_ = new CMsgWriter(&server, os, inputEnabled);
   vlog.debug("Authentication success!");
   writer_->writeClientInit(shared);
 }
@@ -408,6 +477,8 @@ void CConnection::close()
   reader_ = nullptr;
   delete writer_;
   writer_ = nullptr;
+  delete siemensTLS;
+  siemensTLS = nullptr;
 }
 
 void CConnection::setDesktopSize(int w, int h)
@@ -941,6 +1012,8 @@ void CConnection::setPF(const PixelFormat& pf)
 
 bool CConnection::isSecure() const
 {
+  if (siemensTLS)
+    return siemensTLS->isSecure();
   return csecurity ? csecurity->isSecure() : false;
 }
 

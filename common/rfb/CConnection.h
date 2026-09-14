@@ -87,6 +87,15 @@ namespace rfb {
     // server upon initialisation.
     void setShared(bool s) { shared = s; }
 
+    // Accept Siemens' VNC OVER SSL greeting and establish certificate TLS
+    // before sending the RFB version reply. Disabled by default.
+    void setSiemensTLS(bool enabled);
+    bool usesSiemensTLS() const { return siemensTLS != nullptr; }
+
+    // Disable all mouse and keyboard messages at the protocol writer.
+    // Set before initialiseProtocol(); fixed for the life of the connection.
+    void setInputEnabled(bool enabled);
+
     // setFramebuffer configures the PixelBuffer that the CConnection
     // should render all pixel data in to. Note that the CConnection
     // takes ownership of the PixelBuffer and it must not be deleted by
@@ -173,6 +182,7 @@ namespace rfb {
     enum stateEnum {
       RFBSTATE_UNINITIALISED,
       RFBSTATE_PROTOCOL_VERSION,
+      RFBSTATE_SIEMENS_TLS,
       RFBSTATE_SECURITY_TYPES,
       RFBSTATE_SECURITY,
       RFBSTATE_SECURITY_RESULT,
@@ -304,6 +314,8 @@ namespace rfb {
 
   private:
     bool processVersionMsg();
+    bool processSiemensTLSMsg();
+    void writeVersion();
     bool processSecurityTypesMsg();
     bool processSecurityMsg();
     bool processSecurityResultMsg();
@@ -314,6 +326,10 @@ namespace rfb {
 
     void requestNewUpdate();
     void updateEncodings();
+
+    CSecurity* siemensTLS;
+    bool siemensTLSEnabled;
+    bool inputEnabled;
 
     rdr::InStream* is;
     rdr::OutStream* os;

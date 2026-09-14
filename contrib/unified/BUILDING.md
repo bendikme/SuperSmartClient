@@ -59,8 +59,12 @@ The integration tests start a local server on an ephemeral loopback port and
 generate temporary test certificates. They run the compiled viewer through a
 real TLS handshake, verify its VNC challenge response and shared-session flag,
 send a framebuffer and check that the viewer continues requesting updates.
-They also test both TLS modes, conflicting command-line/file settings, rejected
-plaintext/passwordless offers, and ordinary VNC when the profile is disabled.
+They cover both the Siemens `VNC OVER SSL` transport (TLS before the client RFB
+reply) and VeNCrypt, fragmented greetings, certificate decisions, conflicting
+command-line/file settings, rejected plaintext/passwordless offers and ordinary
+VNC when the profile is disabled. All test connections use loopback addresses.
+Profile tests also verify that the protocol writer suppresses mouse and
+keyboard messages, including extended events, in monitor-only connections.
 
 To run the complete upstream unit suite, build all the test targets first:
 

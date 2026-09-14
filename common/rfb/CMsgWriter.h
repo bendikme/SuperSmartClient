@@ -42,7 +42,8 @@ namespace rfb {
 
   class CMsgWriter {
   public:
-    CMsgWriter(ServerParams* server, rdr::OutStream* os);
+    CMsgWriter(ServerParams* server, rdr::OutStream* os,
+               bool inputEnabled = true);
     virtual ~CMsgWriter();
 
     void writeClientInit(bool shared);
@@ -75,6 +76,7 @@ namespace rfb {
 
     ServerParams* server;
     rdr::OutStream* os;
+    const bool inputEnabled;
   };
 }
 #endif

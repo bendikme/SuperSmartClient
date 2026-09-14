@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the native viewer against a loopback-only RFB/VeNCrypt fixture.
+"""Exercise the native viewer against loopback-only Siemens TLS/VeNCrypt fixtures.
 
 Requires Python 3, OpenSSL and a GUI display (use xvfb-run on Linux).
 No panel, credentials, third-party Python packages or external servers required.
@@ -132,19 +132,52 @@ class UnifiedPanelTests(unittest.TestCase):
         except ConnectionResetError:
             pass
 
-    def session(self, connection, anonymous=False):
-        chosen = 258 if anonymous else 261
-        self.vencrypt(connection, [1, 2, 257, 260, chosen])
-        self.assertEqual(struct.unpack("!I", receive(connection, 4))[0], chosen)
-        connection.sendall(b"\x01")
+    def siemens_greeting(self, connection, fragmented=False):
+        greeting = b"VNC OVER SSLRFB 003.008\n"
+        if not fragmented:
+            connection.sendall(greeting)
+            return
+        # Force separate reads: the client must wait without replying until
+        # both the 12-byte marker and 12-byte RFB version have arrived.
+        for fragment in (greeting[:5], greeting[5:12], greeting[12:20]):
+            connection.sendall(fragment)
+            connection.settimeout(0.1)
+            with self.assertRaises(TimeoutError):
+                connection.recv(1)
+        connection.settimeout(10)
+        connection.sendall(greeting[20:])
+
+    def certificate_context(self, version=None):
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.minimum_version = ssl.TLSVersion.TLSv1_2
+        if version is not None:
+            tls.minimum_version = tls.maximum_version = version
+        tls.load_cert_chain(self.cert, self.key)
+        return tls
+
+    def session(self, connection, anonymous=False, siemens=False,
+                fragmented=False, version=None):
+        if siemens:
+            self.siemens_greeting(connection, fragmented)
+        else:
+            chosen = 258 if anonymous else 261
+            self.vencrypt(connection, [1, 2, 257, 260, chosen])
+            self.assertEqual(struct.unpack("!I", receive(connection, 4))[0], chosen)
+            connection.sendall(b"\x01")
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.minimum_version = ssl.TLSVersion.TLSv1_2
         if anonymous:
             tls.maximum_version = ssl.TLSVersion.TLSv1_2
             tls.set_ciphers("AECDH-AES256-SHA:@SECLEVEL=0")
         else:
-            tls.load_cert_chain(self.cert, self.key)
+            tls = self.certificate_context(version)
         with tls.wrap_socket(connection, server_side=True) as secure:
+            if siemens:
+                # This reply must be encrypted. There is no VeNCrypt status
+                # byte, plaintext client version or second VNC OVER SSL marker.
+                self.assertEqual(receive(secure, 12), b"RFB 003.008\n")
+                secure.sendall(b"\x02\x10\x02") # TP1200 V20.2 offers Tight, VncAuth.
+                self.assertEqual(receive(secure, 1), b"\x02")
             secure.sendall(CHALLENGE)
             self.assertEqual(receive(secure, 16), self.response)
             secure.sendall(struct.pack("!I", 0))
@@ -191,6 +224,85 @@ class UnifiedPanelTests(unittest.TestCase):
     def test_certificate_tls_password_and_framebuffer(self):
         with self.viewer() as connection:
             self.session(connection)
+
+    def test_siemens_tls13_password_and_framebuffer(self):
+        with self.viewer() as connection:
+            self.session(connection, siemens=True, version=ssl.TLSVersion.TLSv1_3)
+
+    def test_siemens_tls12_password_and_framebuffer(self):
+        with self.viewer() as connection:
+            self.session(connection, siemens=True, version=ssl.TLSVersion.TLSv1_2)
+
+    def test_siemens_fragmented_greeting(self):
+        with self.viewer() as connection:
+            self.session(connection, siemens=True, fragmented=True)
+
+    def test_siemens_conflicting_saved_settings(self):
+        with self.viewer(config="UnifiedPanel=1\nUnifiedSecurity=Certificate\n"
+                         "SecurityTypes=None,VncAuth\nShared=0\nViewOnly=0\n") as connection:
+            self.session(connection, siemens=True)
+
+    def test_siemens_untrusted_certificate_blocks_version_and_auth(self):
+        with self.viewer("-X509CA", str(self.directory / "missing-ca.pem"),
+                         cancel_after=True) as connection:
+            self.siemens_greeting(connection)
+            tls = self.certificate_context(ssl.TLSVersion.TLSv1_3)
+            with tls.wrap_socket(connection, server_side=True) as secure:
+                secure.settimeout(1)
+                with self.assertRaises(TimeoutError):
+                    receive(secure, 1)
+
+    def test_siemens_passwordless_authentication_is_rejected(self):
+        with self.viewer() as connection:
+            self.siemens_greeting(connection)
+            with self.certificate_context().wrap_socket(connection, server_side=True) as secure:
+                self.assertEqual(receive(secure, 12), b"RFB 003.008\n")
+                secure.sendall(b"\x02\x01\x10") # None and Tight, no VncAuth.
+                self.expect_closed(secure)
+
+    def test_siemens_tls_failure_does_not_fall_back_to_plaintext(self):
+        with self.viewer() as connection:
+            self.siemens_greeting(connection)
+            # A TLS ClientHello must be the first client message.
+            record = receive(connection, 5)
+            self.assertEqual(record[0], 22)
+            receive(connection, struct.unpack("!H", record[3:])[0])
+            connection.sendall(b"\x15\x03\x03\x00\x02\x02\x28") # Fatal TLS alert.
+            # GnuTLS can send a TLS alert on shutdown. Permit only alerts,
+            # never a plaintext RFB reply or authentication selection.
+            for _ in range(4):
+                try:
+                    first = connection.recv(1)
+                except ConnectionResetError:
+                    break
+                if not first:
+                    break
+                self.assertEqual(first, b"\x15")
+                header = receive(connection, 4)
+                self.assertEqual(header[0], 3)
+                self.assertEqual(struct.unpack("!H", header[2:])[0], 2)
+                receive(connection, 2)
+            else:
+                self.fail("Viewer did not close after the failed TLS handshake")
+
+    def test_siemens_prefix_requires_certificate_profile(self):
+        for options in (("-UnifiedPanel=0", "-SecurityTypes=VncAuth"),
+                        ("-UnifiedSecurity=AnonymousTLS",)):
+            with self.subTest(options=options), self.viewer(*options) as connection:
+                self.siemens_greeting(connection)
+                self.expect_closed(connection)
+
+    def test_siemens_invalid_version_is_rejected(self):
+        for version in (b"VNC OVER SSL", b"HTTP/1.1 200\n"):
+            with self.subTest(version=version), self.viewer() as connection:
+                connection.sendall(b"VNC OVER SSL" + version)
+                self.expect_closed(connection)
+
+    def test_siemens_truncated_greeting_sends_nothing(self):
+        with self.viewer() as connection:
+            connection.sendall(b"VNC OVER SSLRFB 003.")
+            connection.shutdown(socket.SHUT_WR)
+            self.expect_closed(connection)
 
     def test_explicit_anonymous_tls_password_and_framebuffer(self):
         with self.viewer("-UnifiedSecurity=AnonymousTLS") as connection:

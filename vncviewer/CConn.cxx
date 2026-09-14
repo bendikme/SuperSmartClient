@@ -83,6 +83,8 @@ CConn::CConn()
     lastServerEncoding((unsigned int)-1), bpsEstimate(20000000)
 {
   setShared(::shared);
+  setSiemensTLS(unifiedPanel && unifiedSecurity == "Certificate");
+  setInputEnabled(!unifiedPanel);
 
   supportsLocalCursor = true;
   supportsCursorPosition = true;
@@ -221,7 +223,8 @@ std::string CConn::connectionInfo()
   infoText += "\n";
 
   infoText += core::format(_("Security method: %s"),
-                           rfb::secTypeName(csecurity->getType()));
+                           usesSiemensTLS() ? "Siemens TLS + VncAuth" :
+                             rfb::secTypeName(csecurity->getType()));
   infoText += "\n";
 
   return infoText;

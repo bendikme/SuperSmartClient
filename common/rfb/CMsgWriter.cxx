@@ -42,8 +42,9 @@
 
 using namespace rfb;
 
-CMsgWriter::CMsgWriter(ServerParams* server_, rdr::OutStream* os_)
-  : server(server_), os(os_)
+CMsgWriter::CMsgWriter(ServerParams* server_, rdr::OutStream* os_,
+                       bool inputEnabled_)
+  : server(server_), os(os_), inputEnabled(inputEnabled_)
 {
 }
 
@@ -155,6 +156,9 @@ void CMsgWriter::writeFence(uint32_t flags, unsigned len, const uint8_t data[])
 
 void CMsgWriter::writeKeyEvent(uint32_t keysym, uint32_t keycode, bool down)
 {
+  if (!inputEnabled)
+    return;
+
   if (!server->supportsQEMUKeyEvent || !keycode) {
     /* This event isn't meaningful without a valid keysym */
     if (!keysym)
@@ -179,6 +183,9 @@ void CMsgWriter::writeKeyEvent(uint32_t keysym, uint32_t keycode, bool down)
 void CMsgWriter::writePointerEvent(const core::Point& pos,
                                    uint16_t buttonMask)
 {
+  if (!inputEnabled)
+    return;
+
   core::Point p(pos);
   bool extendedMouseButtons;
 
