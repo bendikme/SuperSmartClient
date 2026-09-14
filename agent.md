@@ -64,3 +64,10 @@
   presets and independent local scaling. Scaling must not resize the HMI.
 - Use the bundled Roboto fonts throughout the application UI and retain their
   license. Keep frames and spacing compact.
+
+- Grid geometry must depend on workspace size, preset and saved divider ratios,
+  never on framebuffer dimensions or connection state. Preserve free placement
+  coordinates and independent scaling when switching arrangements.
+- Keep the main toolbar to one compact row. Fullscreen hides toolbar and panel
+  chrome, preserves windowed geometry, and retains a visible exit control.
+  F11 and fullscreen Escape, including key releases, must remain local.

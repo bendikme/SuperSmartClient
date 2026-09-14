@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 #include <memory>
 #include <stdexcept>
 #include <core/string.h>
@@ -30,6 +31,7 @@
 
 namespace dashboard {
 namespace {
+constexpr int frameWidth = 2, frameHeight = 26, toolbarHeight = 40;
 struct Palette {
   Fl_Color background, card, border, text, muted, accent, soft, green, amber;
 };
@@ -365,6 +367,7 @@ public:
   int handle(int event) override;
   void resize(int x, int y, int w, int h) override;
   void changed();
+  void releaseInput() { remoteFocus_ = false; session.releaseInput(); }
   Panel panel;
   Session session;
 private:
@@ -385,6 +388,19 @@ private:
   bool remoteFocus_ = false;
 };
 
+class Divider : public Fl_Widget {
+public:
+  Divider(Dashboard& owner) : Fl_Widget(0, 0, 1, 1), owner_(owner) {}
+  void configure(bool vertical, int boundary) { vertical_ = vertical; boundary_ = boundary; }
+  void draw() override;
+  int handle(int event) override;
+private:
+  Dashboard& owner_;
+  bool vertical_ = true, hovering_ = false, dragging_ = false;
+  int boundary_ = 0, press_ = 0;
+  std::vector<int> initial_;
+};
+
 class Dashboard : public Fl_Double_Window {
 public:
   Dashboard(Library library, std::filesystem::path path)
@@ -395,53 +411,30 @@ public:
     size_range(860, 600);
     begin();
     add_ = new Button(0, 0, 132, 38, "+ Add panel", true);
-    connect_ = new Button(0, 0, 108, 34, "Connect all");
-    disconnect_ = new Button(0, 0, 118, 34, "Disconnect all");
-    back_ = new Button(0, 0, 112, 34, "Back to grid"); back_->hide();
-    theme_ = new Button(0, 0, 100, 34, "Dark theme");
+    back_ = new Button(0, 0, 84, 30, "Overview"); back_->hide();
+    actions_ = new Button(0, 0, 30, 30, "..."); actions_->tooltip("Workspace actions and appearance");
+    full_ = new Button(0, 0, 108, 30, "Full screen"); full_->tooltip("Screens only (F11). Exit with F11 or Esc.");
     layouts_ = new Choice(0, 0, 254, 32);
-    libraryMenu_ = new Button(0, 0, 100, 34, "Layouts...");
+    layouts_->tooltip("Open and connect a saved layout");
+    libraryMenu_ = new Button(0, 0, 76, 30, "Layouts");
     preset_ = new Choice(0, 0, 205, 27);
-    preset_->add("Custom grid|1 - Single|2 - Side by side|2 - Stacked|3 - Top + two below|3 - Left + two right|4 - Grid 2 x 2|6 - Grid 3 x 2|9 - Grid 3 x 3|Free placement");
+    preset_->add("Custom grid|Single column|Side by side|Stacked|Top + two below|Left + two right|Grid 2 x 2|Grid 3 x 2|Grid 3 x 3|Free placement");
     preset_->value(static_cast<int>(workspace_.preset));
-    preset_->tooltip("Choose a preset or place windows freely. Extra panels continue below the arrangement.");
-    columns_ = new Choice(0, 0, 60, 32);
-    columns_->add("1|2|3|4"); columns_->value(workspace_.columns - 1);
-    height_ = new Choice(0, 0, 118, 32);
-    height_->add("Fit window|Compact|Comfortable|Large");
-    height_->value(heightChoice());
+    preset_->tooltip("Choose an arrangement. Drag its dividers to resize panes. Free placement restores saved window positions.");
     scroll_ = new Fl_Scroll(24, 144, w() - 48, h() - 194);
     scroll_->type(Fl_Scroll::BOTH); scroll_->box(FL_NO_BOX);
     // Keep a stable canvas origin even when every freely placed tile has a
     // positive offset. Otherwise Fl_Scroll reports negative scroll positions.
     anchor_ = new Fl_Box(scroll_->x(), scroll_->y(), 1, 1); anchor_->box(FL_NO_BOX);
     scroll_->end();
+    exitFull_ = new Button(0, 0, 30, 24, "\xc3\x97"); exitFull_->hide();
+    exitFull_->tooltip("Exit full screen (F11 / Esc)");
     end();
     add_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->edit(nullptr); }, this);
-    connect_->callback([](Fl_Widget*, void* data) {
-      auto& app = *static_cast<Dashboard*>(data);
-      for (auto* tile : app.tiles_) if (!tile->session.wanted()) tile->session.start();
-    }, this);
-    disconnect_->callback([](Fl_Widget*, void* data) {
-      for (auto* tile : static_cast<Dashboard*>(data)->tiles_) tile->session.stop();
-    }, this);
     back_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->focusTile(nullptr); }, this);
-    theme_->callback([](Fl_Widget*, void* data) {
-      auto& app = *static_cast<Dashboard*>(data);
-      app.workspace_.dark = !app.workspace_.dark; app.applyTheme(); app.save();
-    }, this);
-    columns_->callback([](Fl_Widget*, void* data) {
-      auto& app = *static_cast<Dashboard*>(data);
-      app.workspace_.preset = Preset::CustomGrid; app.preset_->value(0);
-      app.workspace_.columns = app.columns_->value() + 1;
-      for (auto* tile : app.tiles_) tile->panel.fit = true;
-      app.arrange(); app.save();
-    }, this);
-    height_->callback([](Fl_Widget*, void* data) {
-      auto& app = *static_cast<Dashboard*>(data);
-      const int sizes[] = {0, 200, 260, 380}; app.workspace_.rowHeight = sizes[app.height_->value()];
-      app.arrange(); app.save();
-    }, this);
+    actions_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->workspaceMenu(); }, this);
+    auto toggle = [](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->toggleFullScreen(); };
+    full_->callback(toggle, this); exitFull_->callback(toggle, this);
     layouts_->callback([](Fl_Widget*, void* data) {
       auto& app = *static_cast<Dashboard*>(data);
       app.switchLayout(static_cast<size_t>(app.layouts_->value()));
@@ -459,6 +452,7 @@ public:
       app.hide();
     }, this);
     for (const auto& panel : workspace_.panels) addTile(panel);
+    windowed_ = {x(), y(), w(), h()};
     updateLayouts(); applyTheme(); arrange();
     Fl::add_timeout(0.05, tick, this);
   }
@@ -467,9 +461,10 @@ public:
   Palette colors() const { return palette(workspace_.dark); }
   bool focused(const Tile* tile) const { return focused_ == tile; }
   bool selected(const Tile* tile) const { return selected_ == tile; }
+  bool screensOnly() const { return presentation_; }
   void select(Tile* tile) {
     selected_ = tile;
-    if (freePlacement() && !focused_ && tiles_.back() != tile) {
+    if (freePlacement() && !focused_ && !presentation_ && tiles_.back() != tile) {
       tiles_.erase(tiles_.begin() + index(tile)); tiles_.push_back(tile);
       scroll_->remove(tile); scroll_->add(tile); save();
     }
@@ -477,8 +472,37 @@ public:
   }
   void repaintTile() { if (freePlacement()) scroll_->redraw(); }
   void statusChanged() { redraw(); }
-  void resolutionChanged() { if (!workspace_.rowHeight || freePlacement()) arrange(); }
+  void resolutionChanged() { if (freePlacement()) arrange(); }
   bool freePlacement() const { return workspace_.preset == Preset::Free; }
+  std::vector<int> dividerSizes(bool vertical) const { return vertical ? grid_.columnSizes : grid_.rowSizes; }
+  void resizeDivider(bool vertical, int boundary, const std::vector<int>& initial, int delta) {
+    resizeGridDivider(workspace_, vertical, boundary, initial, delta, vertical ? 160 : 96);
+    arrange();
+  }
+  void resetDividers() { workspace_.columnWeights.clear(); workspace_.rowWeights.clear(); arrange(); save(); }
+  void releaseInput() { for (auto* tile : tiles_) tile->releaseInput(); }
+  void toggleFullScreen() {
+    releaseInput(); transitioning_ = true;
+    if (!presentation_) {
+      windowed_ = {x(), y(), w(), h()}; presentation_ = true;
+      fullscreen();
+    } else {
+      presentation_ = false; fullscreen_off(windowed_.x, windowed_.y, windowed_.width, windowed_.height);
+    }
+    transitioning_ = false; arrange(); save();
+  }
+  bool localKey(int event) {
+    if (event != FL_KEYDOWN && event != FL_KEYUP && event != FL_SHORTCUT) return false;
+    int key = Fl::event_key();
+    if (event == FL_KEYUP) return localKeys_.erase(key) != 0 || key == FL_F + 11;
+    if (key != FL_F + 11 && !(key == FL_Escape && presentation_) && !localKeys_.count(key)) return false;
+    if (localKeys_.insert(key).second) toggleFullScreen();
+    return true;
+  }
+  int handle(int event) override {
+    if (localKey(event)) return 1;
+    return Fl_Double_Window::handle(event);
+  }
   void edit(Tile* tile) {
     if (!tile && tiles_.size() >= 32) { fl_alert("A workspace supports up to 32 panels."); return; }
     Panel profile = tile ? tile->panel : Panel{};
@@ -486,6 +510,7 @@ public:
     if (!tile && freePlacement() && !tiles_.empty()) {
       profile.pixelX = std::min(65535, tiles_.back()->panel.pixelX + 24);
       profile.pixelY = std::min(65535, tiles_.back()->panel.pixelY + 24);
+      profile.freePositioned = true;
     }
     Editor dialog(profile, !tile, colors());
     if (!dialog.run()) return;
@@ -503,7 +528,7 @@ public:
     }
     selected_ = tile; arrange();
     if (workspace_.preset != Preset::CustomGrid && workspace_.preset != Preset::Free)
-      choosePreset(workspace_.preset);
+      choosePreset(workspace_.preset, false);
     if (restart) tile->session.start();
   }
   void menu(Tile* tile) {
@@ -516,6 +541,7 @@ public:
       {"Move later", 0, nullptr, nullptr, FL_MENU_DIVIDER, 0, 0, 0, 0},
       {"Remove from workspace", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {"Size and scale...", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Disconnect", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {nullptr, 0, nullptr, nullptr, 0, 0, 0, 0, 0}
     };
     const Fl_Menu_Item* choice = items->popup(Fl::event_x(), Fl::event_y(), nullptr, nullptr, layouts_);
@@ -528,13 +554,12 @@ public:
       case 4: move(tile, std::min(index(tile) + 1, tiles_.size() - 1)); break;
       case 5: removeTile(tile); break;
       case 6: viewSettings(tile); break;
+      case 7: tile->session.stop(); break;
     }
   }
   void focusTile(Tile* tile) {
-    for (auto* item : tiles_) item->session.releaseInput();
+    releaseInput();
     focused_ = focused_ == tile ? nullptr : tile;
-    if (focused_) { back_->show(); columns_->deactivate(); height_->deactivate(); preset_->deactivate(); }
-    else { back_->hide(); columns_->activate(); height_->activate(); preset_->activate(); }
     arrange();
   }
   void drop(Tile* source, int x, int y) {
@@ -545,21 +570,19 @@ public:
     }
   }
   void resizeTile(Tile* tile, int width, int height) {
-    if (focused_) return;
+    if (focused_ || presentation_) return;
     if (freePlacement()) {
       tile->panel.fit = true;
-      tile->panel.pixelWidth = std::clamp(width, 144, 8192);
+      tile->panel.freePositioned = true;
+      tile->panel.pixelWidth = std::clamp(width, 160, 8192);
       tile->panel.pixelHeight = std::clamp(height, 100, 4320);
       arrange(); return;
     }
-    workspace_.preset = Preset::CustomGrid; preset_->value(0);
-    tile->panel.columns = std::clamp(static_cast<int>(std::round((width + gap) / static_cast<double>(cellWidth_ + gap))), 1, workspace_.columns);
-    tile->panel.rows = std::clamp(static_cast<int>(std::round((height + gap) / static_cast<double>(cellHeight_ + gap))), 1, 4);
-    arrange();
   }
   void moveFree(Tile* tile, int x, int y) {
-    if (!freePlacement() || focused_) return;
+    if (!freePlacement() || focused_ || presentation_) return;
     tile->panel.pixelX = std::clamp(x, 0, 65535); tile->panel.pixelY = std::clamp(y, 0, 65535);
+    tile->panel.freePositioned = true;
     arrange();
   }
   bool save() {
@@ -568,44 +591,39 @@ public:
   }
   void resize(int x, int y, int w, int h) override {
     Fl_Double_Window::resize(x, y, w, h);
+    if (!presentation_ && !transitioning_) windowed_ = {x, y, w, h};
     if (scroll_) arrange();
   }
   void draw() override {
     bool full = (damage() & ~FL_DAMAGE_CHILD) != 0;
     const auto p = colors();
     if (full) {
-    fl_color(p.background); fl_rectf(0, 0, w(), h());
-    fl_color(fl_rgb_color(19, 33, 53)); fl_rectf(0, 0, w(), 58);
-    rounded(12, 14, 30, 30, fl_rgb_color(43, 119, 243), 7);
-    fl_color(FL_WHITE);
-    fl_rect(18, 20, 7, 7); fl_rect(29, 20, 7, 7);
-    fl_rect(18, 31, 7, 7); fl_rect(29, 31, 7, 7);
-    caption("SuperSmartClient", 52, 7, 245, 27, FL_WHITE, 20, true);
-    caption("Unified panel workspace", 53, 33, 245, 17, fl_rgb_color(165, 187, 213), 10);
-    caption("Layout", 299, 16, 45, 27, fl_rgb_color(165, 187, 213), 11);
-    caption("Arrange", 10, 67, 48, 25, p.muted, 11);
-    caption("Columns", 279, 67, 48, 25, p.muted, 11);
-    caption("View", 385, 67, 32, 25, p.muted, 11);
-    int live = 0;
-    for (auto* tile : tiles_) live += tile->session.live();
-    caption(std::to_string(live) + " / " + std::to_string(tiles_.size()) + " panels connected",
-      9, h() - 19, 230, 17, p.muted, 10);
-    caption(freePlacement() ? "Drag headers to move  /  Drag corners to resize  /  ... for size and scale" :
-      "Drag headers to reorder  /  Drag corners to resize  /  ... for size and scale",
-      245, h() - 19, w() - 254, 17, p.muted, 10, false, FL_ALIGN_RIGHT);
+      fl_color(presentation_ ? fl_rgb_color(13, 22, 35) : p.background); fl_rectf(0, 0, w(), h());
+      if (!presentation_) {
+        fl_color(p.card); fl_rectf(0, 0, w(), toolbarHeight);
+        rounded(4, 8, 24, 24, fl_rgb_color(37, 99, 235), 6);
+        fl_color(FL_WHITE);
+        fl_rect(9, 13, 5, 5); fl_rect(18, 13, 5, 5);
+        fl_rect(9, 22, 5, 5); fl_rect(18, 22, 5, 5);
+        int live = 0; for (auto* tile : tiles_) live += tile->session.live();
+        int left = focused_ ? 700 : 606;
+        if (w() - 164 - left >= 100)
+          caption(std::to_string(live) + " / " + std::to_string(tiles_.size()) + " connected",
+                  left, 5, w() - 164 - left, 30, p.muted, 11, false, FL_ALIGN_RIGHT);
+      }
     }
     draw_children();
-    if (full && tiles_.empty()) {
+    if (full && tiles_.empty() && !presentation_) {
       rounded(w() / 2 - 34, h() / 2 - 88, 68, 68, p.soft, 16);
       caption("+", w() / 2 - 34, h() / 2 - 88, 68, 68, p.accent, 36, false, FL_ALIGN_CENTER);
       caption("Your panels, together", 30, h() / 2 - 4, w() - 60, 36, p.text, 25, true, FL_ALIGN_CENTER);
       caption("Add your first panel to build a workspace.", 30, h() / 2 + 39, w() - 60, 25, p.muted, 14, false, FL_ALIGN_CENTER);
       caption("Connections, passwords and layout are remembered on this PC.", 30, h() / 2 + 72, w() - 60, 24, p.muted, 12, false, FL_ALIGN_CENTER);
     }
+    // Streaming tiles repaint underneath the exit control, so composite it last.
+    if (presentation_) exitFull_->draw();
   }
 private:
-  static constexpr int gap = 6;
-  int heightChoice() const { return workspace_.rowHeight == 0 ? 0 : workspace_.rowHeight <= 220 ? 1 : workspace_.rowHeight <= 300 ? 2 : 3; }
   static void tick(void* data) {
     auto& app = *static_cast<Dashboard*>(data);
     // Schedule before processing so other sessions keep updating in certificate dialogs.
@@ -621,7 +639,7 @@ private:
   }
   size_t index(Tile* tile) const { return std::find(tiles_.begin(), tiles_.end(), tile) - tiles_.begin(); }
   Workspace snapshot() const {
-    Workspace result = workspace_; result.width = w(); result.height = h(); result.panels.clear();
+    Workspace result = workspace_; result.width = windowed_.width; result.height = windowed_.height; result.panels.clear();
     for (auto* tile : tiles_) result.panels.push_back(tile->panel);
     return result;
   }
@@ -651,30 +669,29 @@ private:
       tile->session.stop(); scroll_->remove(tile); Fl::delete_widget(tile);
     }
     tiles_.clear(); selected_ = nullptr; focused_ = nullptr;
-    back_->hide(); columns_->activate(); height_->activate(); preset_->activate();
+    back_->hide();
     library_ = std::move(candidate);
     workspace_ = library_.layouts[activeLayout(library_)].workspace;
-    columns_->value(workspace_.columns - 1);
-    height_->value(heightChoice());
     preset_->value(static_cast<int>(workspace_.preset));
     for (const auto& panel : workspace_.panels) addTile(panel);
     updateLayouts(); applyTheme(); arrange();
     if (connect) for (auto* tile : tiles_) tile->session.start();
   }
-  void choosePreset(Preset preset) {
+  void choosePreset(Preset preset, bool resetDividers = true) {
+    releaseInput();
     if (focused_) focusTile(nullptr);
     if (preset == Preset::Free && !freePlacement()) {
-      for (auto* tile : tiles_) {
+      for (auto* tile : tiles_) if (!tile->panel.freePositioned) {
         tile->panel.pixelX = tile->x() - scroll_->x() + scroll_->xposition();
         tile->panel.pixelY = tile->y() - scroll_->y() + scroll_->yposition();
         tile->panel.pixelWidth = tile->w(); tile->panel.pixelHeight = tile->h();
+        tile->panel.freePositioned = true;
       }
     }
-    Workspace candidate = snapshot(); applyPreset(candidate, preset);
-    workspace_.preset = preset; workspace_.columns = candidate.columns; workspace_.rowHeight = candidate.rowHeight;
+    Workspace candidate = snapshot(); applyPreset(candidate, preset, resetDividers);
+    workspace_ = candidate;
     for (size_t number = 0; number < tiles_.size(); ++number) tiles_[number]->panel = candidate.panels[number];
-    if (preset == Preset::CustomGrid) for (auto* tile : tiles_) tile->panel.fit = true;
-    preset_->value(static_cast<int>(preset)); columns_->value(workspace_.columns - 1); height_->value(heightChoice());
+    preset_->value(static_cast<int>(preset));
     arrange(); save();
   }
   void viewSettings(Tile* tile) {
@@ -683,6 +700,11 @@ private:
     tile->panel.displayWidth = dialog.result.displayWidth; tile->panel.displayHeight = dialog.result.displayHeight;
     tile->panel.displayPreset = dialog.result.displayPreset;
     tile->panel.scale = dialog.result.scale; tile->panel.fit = dialog.result.fit;
+    if (freePlacement() && !tile->panel.fit) {
+      auto size = scaledDisplaySize(tile->panel, tile->session.width(), tile->session.height());
+      tile->panel.pixelWidth = size.first + frameWidth; tile->panel.pixelHeight = size.second + frameHeight;
+      tile->panel.freePositioned = true;
+    }
     arrange(); save();
   }
   void layoutMenu() {
@@ -755,6 +777,31 @@ private:
       }
     } catch (const std::exception& error) { fl_alert("%s", error.what()); }
   }
+  void workspaceMenu() {
+    releaseInput();
+    Fl_Menu_Item items[] = {
+      {"Connect all", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Disconnect all", 0, nullptr, nullptr, FL_MENU_DIVIDER, 0, 0, 0, 0},
+      {"Reset pane divisions", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {workspace_.dark ? "Light theme" : "Dark theme", 0, nullptr, nullptr, FL_MENU_DIVIDER, 0, 0, 0, 0},
+      {"Custom grid: 1 column", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Custom grid: 2 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Custom grid: 3 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Custom grid: 4 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {nullptr, 0, nullptr, nullptr, 0, 0, 0, 0, 0}
+    };
+    const auto* choice = items->pulldown(actions_->x(), actions_->y(), actions_->w(), actions_->h(), nullptr, layouts_);
+    if (!choice) return;
+    int action = static_cast<int>(choice - items);
+    if (action <= 1) for (auto* tile : tiles_) { if (action == 0) tile->session.start(); else tile->session.stop(); }
+    else if (action == 2) resetDividers();
+    else if (action == 3) { workspace_.dark = !workspace_.dark; applyTheme(); save(); }
+    else {
+      workspace_.columns = action - 3;
+      for (auto* tile : tiles_) tile->panel.columns = tile->panel.rows = 1;
+      choosePreset(Preset::CustomGrid);
+    }
+  }
   void applyTheme() {
     const auto p = colors(); color(p.background); scroll_->color(p.background);
     Fl::set_color(FL_BACKGROUND_COLOR, p.background); Fl::set_color(FL_BACKGROUND2_COLOR, p.card);
@@ -764,72 +811,81 @@ private:
     // FLTK's shared name/password/certificate dialogs use the standard boxes.
     Fl::set_boxtype(FL_UP_BOX, dialogButtonBox, 2, 2, 4, 4);
     Fl::set_boxtype(FL_DOWN_BOX, dialogButtonBox, 2, 2, 4, 4);
-    for (auto* button : {add_, connect_, disconnect_, libraryMenu_}) button->theme(p, fl_rgb_color(19, 33, 53));
-    for (auto* button : {back_, theme_}) button->theme(p, p.background);
-    theme_->label(workspace_.dark ? "Light theme" : "Dark theme");
-    for (auto* choice : {columns_, height_, preset_}) choice->theme(p, p.background);
-    layouts_->theme(p, fl_rgb_color(19, 33, 53));
+    for (auto* button : {add_, libraryMenu_, back_, actions_, full_}) button->theme(p, p.card);
+    exitFull_->theme(palette(true), fl_rgb_color(13, 22, 35));
+    for (auto* choice : {preset_, layouts_}) choice->theme(p, p.card);
     redraw();
   }
   void arrange() {
-    if (!focused_) {
-      if (freePlacement()) { columns_->deactivate(); height_->deactivate(); }
-      else { columns_->activate(); height_->activate(); }
+    for (Fl_Widget* widget : std::vector<Fl_Widget*>{add_, libraryMenu_, layouts_, preset_, actions_, full_}) {
+      if (presentation_) widget->hide(); else widget->show();
     }
-    add_->resize(w() - 122, 13, 110, 32);
-    layouts_->resize(348, 16, 214, 27); libraryMenu_->resize(572, 13, 96, 32);
-    preset_->resize(62, 66, 205, 27); columns_->resize(329, 66, 44, 27); height_->resize(425, 66, 164, 27);
-    connect_->resize(w() - 342, 13, 96, 32); disconnect_->resize(w() - 238, 13, 108, 32);
-    if (w() >= 1024) { connect_->show(); disconnect_->show(); }
-    else { connect_->hide(); disconnect_->hide(); }
-    back_->resize(603, 65, 108, 29); theme_->resize(w() - 108, 65, 100, 29);
+    if (focused_ && !presentation_) back_->show(); else back_->hide();
+    if (presentation_) exitFull_->show(); else exitFull_->hide();
+    layouts_->resize(36, 5, 186, 30); preset_->resize(228, 5, 184, 30);
+    add_->resize(418, 5, 94, 30); libraryMenu_->resize(518, 5, 76, 30);
+    back_->resize(600, 5, 84, 30); full_->resize(w() - 150, 5, 108, 30);
+    actions_->resize(w() - 36, 5, 30, 30); exitFull_->resize(w() - 36, 6, 30, 24);
     int oldX = std::max(0, scroll_->xposition()), oldY = std::max(0, scroll_->yposition());
-    scroll_->scroll_to(0, 0); scroll_->resize(8, 104, w() - 16, h() - 127);
+    scroll_->scroll_to(0, 0);
+    if (presentation_) scroll_->resize(0, 0, w(), h());
+    else scroll_->resize(4, toolbarHeight + 4, w() - 8, h() - toolbarHeight - 8);
+    scroll_->color(presentation_ ? fl_rgb_color(13, 22, 35) : colors().background);
     anchor_->resize(scroll_->x(), scroll_->y(), 1, 1);
-    auto positions = layout(snapshot().panels, workspace_.columns);
-    int rows = 1;
-    for (const auto& position : positions) rows = std::max(rows, position.row + position.rows);
-    int available = scroll_->w();
-    // Reserve scrollbar width only when a fixed-height grid needs it.
-    if (workspace_.rowHeight && rows * (workspace_.rowHeight + gap) - gap > scroll_->h())
-      available -= Fl::scrollbar_size();
-    cellWidth_ = std::max(230, (available - (workspace_.columns - 1) * gap) / workspace_.columns);
-    cellHeight_ = workspace_.rowHeight;
-    if (!cellHeight_) {
-      int natural = static_cast<int>(cellWidth_ * 9.0 / 16) + 51;
-      for (const auto* tile : tiles_) if (tile->session.width())
-        natural = std::max(natural, (cellWidth_ * std::min(tile->panel.columns, workspace_.columns) *
-          tile->session.height() / tile->session.width() + 51) / tile->panel.rows);
-      cellHeight_ = std::max(140, std::min(natural, (scroll_->h() - (rows - 1) * gap) / rows));
-      if (rows * (cellHeight_ + gap) - gap > scroll_->h()) {
-        available -= Fl::scrollbar_size();
-        cellWidth_ = std::max(230, (available - (workspace_.columns - 1) * gap) / workspace_.columns);
+    std::vector<Rect> rectangles;
+    if (!freePlacement()) {
+      auto current = snapshot();
+      grid_ = gridGeometry(current, scroll_->w(), scroll_->h(), presentation_ ? 2 : 4,
+                           presentation_ ? 1 : 160, presentation_ ? 1 : 96);
+      if (!presentation_ && !focused_ && grid_.height > scroll_->h())
+        grid_ = gridGeometry(current, scroll_->w() - Fl::scrollbar_size(), scroll_->h());
+      rectangles = grid_.panels;
+    } else {
+      for (auto* tile : tiles_) {
+        auto& panel = tile->panel;
+        int width = panel.pixelWidth, height = panel.pixelHeight;
+        if (!panel.fit) {
+          auto size = scaledDisplaySize(panel, tile->session.width(), tile->session.height());
+          width = size.first + frameWidth; height = size.second + frameHeight;
+        }
+        rectangles.push_back({panel.pixelX, panel.pixelY, width, height});
+      }
+      if (presentation_ && !rectangles.empty()) {
+        int left = rectangles[0].x, top = rectangles[0].y, right = 0, bottom = 0;
+        for (const auto& rect : rectangles) {
+          left = std::min(left, rect.x); top = std::min(top, rect.y);
+          right = std::max(right, rect.x + rect.width); bottom = std::max(bottom, rect.y + rect.height);
+        }
+        double scale = std::min(scroll_->w() / static_cast<double>(right - left), scroll_->h() / static_cast<double>(bottom - top));
+        int dx = (scroll_->w() - static_cast<int>((right - left) * scale)) / 2;
+        int dy = (scroll_->h() - static_cast<int>((bottom - top) * scale)) / 2;
+        for (auto& rect : rectangles) rect = {dx + static_cast<int>((rect.x - left) * scale),
+          dy + static_cast<int>((rect.y - top) * scale), std::max(1, static_cast<int>(rect.width * scale)),
+          std::max(1, static_cast<int>(rect.height * scale))};
       }
     }
     for (size_t number = 0; number < tiles_.size(); ++number) {
       auto* tile = tiles_[number];
       if (focused_ && focused_ != tile) { tile->hide(); continue; }
       tile->show();
-      if (focused_) tile->resize(scroll_->x(), scroll_->y(), available,
-        scroll_->h());
-      else if (freePlacement()) {
-        if (!tile->panel.fit) {
-          auto size = scaledDisplaySize(tile->panel, tile->session.width(), tile->session.height());
-          tile->panel.pixelWidth = std::max(144, size.first + 4);
-          tile->panel.pixelHeight = std::max(100, size.second + 51);
-        }
-        tile->resize(scroll_->x() + tile->panel.pixelX, scroll_->y() + tile->panel.pixelY,
-          tile->panel.pixelWidth, tile->panel.pixelHeight);
-      }
-      else {
-        const auto& p = positions[number];
-        tile->resize(scroll_->x() + p.column * (cellWidth_ + gap),
-          scroll_->y() + p.row * (cellHeight_ + gap),
-          p.columns * (cellWidth_ + gap) - gap,
-          p.rows * (cellHeight_ + gap) - gap);
-      }
+      const auto& rect = rectangles[number];
+      if (focused_) tile->resize(scroll_->x(), scroll_->y(), scroll_->w(), scroll_->h());
+      else tile->resize(scroll_->x() + rect.x, scroll_->y() + rect.y, rect.width, rect.height);
     }
-    if (freePlacement()) scroll_->scroll_to(oldX, oldY);
+    size_t count = freePlacement() || focused_ || presentation_ ? 0 : grid_.dividers.size();
+    while (dividers_.size() < count) {
+      Fl_Group* previous = Fl_Group::current(); scroll_->begin();
+      auto* divider = new Divider(*this); divider->tooltip("Drag to resize panes. Double-click to reset divisions.");
+      dividers_.push_back(divider); scroll_->end(); Fl_Group::current(previous);
+    }
+    for (size_t number = 0; number < dividers_.size(); ++number) {
+      auto* divider = dividers_[number];
+      if (number >= count) { divider->hide(); continue; }
+      const auto& placement = grid_.dividers[number]; const auto& rect = placement.rect;
+      divider->configure(placement.vertical, placement.boundary);
+      divider->resize(scroll_->x() + rect.x, scroll_->y() + rect.y, rect.width, rect.height); divider->show();
+    }
+    if (!presentation_ && !focused_ && freePlacement()) scroll_->scroll_to(oldX, oldY);
     redraw();
   }
   void move(Tile* tile, size_t to) {
@@ -837,7 +893,7 @@ private:
     tiles_.erase(tiles_.begin() + index(tile));
     tiles_.insert(tiles_.begin() + to, tile);
     if (freePlacement()) for (auto* item : tiles_) { scroll_->remove(item); scroll_->add(item); }
-    if (workspace_.preset != Preset::CustomGrid && !freePlacement()) choosePreset(workspace_.preset);
+    if (workspace_.preset != Preset::CustomGrid && !freePlacement()) choosePreset(workspace_.preset, false);
     else { arrange(); save(); }
   }
   void removeTile(Tile* tile) {
@@ -853,7 +909,7 @@ private:
     if (selected_ == tile) selected_ = nullptr;
     tiles_.erase(tiles_.begin() + index(tile));
     scroll_->remove(tile); Fl::delete_widget(tile);
-    if (workspace_.preset != Preset::CustomGrid && !freePlacement()) choosePreset(workspace_.preset);
+    if (workspace_.preset != Preset::CustomGrid && !freePlacement()) choosePreset(workspace_.preset, false);
     else arrange();
   }
   Library library_;
@@ -863,16 +919,20 @@ private:
   Tile *focused_ = nullptr, *selected_ = nullptr;
   Fl_Scroll* scroll_ = nullptr;
   Fl_Box* anchor_;
-  Button *add_, *connect_, *disconnect_, *back_, *theme_, *libraryMenu_;
-  Choice *columns_, *height_, *layouts_, *preset_;
-  int cellWidth_ = 400, cellHeight_ = 260;
+  Button *add_, *back_, *actions_, *full_, *exitFull_, *libraryMenu_;
+  Choice *layouts_, *preset_;
+  GridGeometry grid_;
+  std::vector<Divider*> dividers_;
+  bool presentation_ = false, transitioning_ = false;
+  Rect windowed_{};
+  std::set<int> localKeys_;
 };
 
 Tile::Tile(Dashboard& owner, Panel profile)
   : Fl_Widget(0, 0, 300, 260), panel(std::move(profile)),
     session(panel, [this] { changed(); }), owner_(owner)
 {
-  tooltip("Drag the header to arrange. Drag the bottom-right corner to resize. Use ... for size and scale.");
+  tooltip("Drag headers to arrange. Resize grid dividers or free-window corners. Use ... for connection, size and scale.");
 }
 void Tile::changed() {
   if (serverWidth_ != session.width() || serverHeight_ != session.height()) {
@@ -886,11 +946,13 @@ void Tile::changed() {
   }
 }
 void Tile::resize(int x, int y, int w, int h) {
-  Fl_Widget::resize(x, y, w, h); image_.reset();
+  if (w != this->w() || h != this->h()) image_.reset();
+  Fl_Widget::resize(x, y, w, h);
 }
 void Tile::imageRect(int& left, int& top, int& width, int& height) const {
-  left = x() + 2; top = y() + 31; width = w() - 4; height = h() - 51;
-  if (!panel.fit && !owner_.focused(this)) {
+  left = x(); top = y(); width = w(); height = h();
+  if (!owner_.screensOnly()) { left += 1; top += 25; width -= frameWidth; height -= frameHeight; }
+  if (!panel.fit && owner_.freePlacement() && !owner_.focused(this) && !owner_.screensOnly()) {
     auto size = scaledDisplaySize(panel, session.width(), session.height());
     int fixedW = std::min(width, size.first), fixedH = std::min(height, size.second);
     left += (width - fixedW) / 2; top += (height - fixedH) / 2;
@@ -904,24 +966,48 @@ void Tile::imageRect(int& left, int& top, int& width, int& height) const {
   left += (width - scaledW) / 2; top += (height - scaledH) / 2;
   width = scaledW; height = scaledH;
 }
-void Tile::draw() {
-  const auto p = owner_.colors();
-  rounded(x(), y(), w(), h(), owner_.selected(this) ? p.accent : p.border, 4);
-  rounded(x() + 1, y() + 1, w() - 2, h() - 2, p.card, 3);
-  for (int dy = 0; dy < 3; ++dy) for (int dx = 0; dx < 2; ++dx) {
-    fl_color(p.muted); fl_rectf(x() + 5 + dx * 3, y() + 10 + dy * 4, 1, 1);
+void Divider::draw() {
+  fl_color(hovering_ || dragging_ ? owner_.colors().accent : owner_.colors().background);
+  fl_rectf(x(), y(), w(), h());
+}
+int Divider::handle(int event) {
+  if (owner_.localKey(event)) return 1;
+  switch (event) {
+    case FL_FOCUS: return 1;
+    case FL_ENTER: hovering_ = true; window()->cursor(vertical_ ? FL_CURSOR_WE : FL_CURSOR_NS); redraw(); return 1;
+    case FL_LEAVE: hovering_ = false; if (!dragging_) window()->cursor(FL_CURSOR_DEFAULT); redraw(); return 1;
+    case FL_PUSH:
+      owner_.releaseInput(); take_focus();
+      if (Fl::event_clicks()) { owner_.resetDividers(); return 1; }
+      dragging_ = true; press_ = vertical_ ? Fl::event_x() : Fl::event_y();
+      initial_ = owner_.dividerSizes(vertical_); return 1;
+    case FL_DRAG:
+      if (dragging_) owner_.resizeDivider(vertical_, boundary_, initial_, (vertical_ ? Fl::event_x() : Fl::event_y()) - press_);
+      return 1;
+    case FL_RELEASE:
+      if (dragging_) { dragging_ = false; owner_.save(); }
+      window()->cursor(FL_CURSOR_DEFAULT); redraw(); return 1;
   }
-  int nameWidth = w() - 143;
-  if (w() >= 540) nameWidth -= 180;
-  caption(panel.name, x() + 16, y() + 3, nameWidth, 24, p.text, 12, true);
-  if (w() >= 540) caption(panel.address, x() + 20 + nameWidth, y() + 3, 175, 24, p.muted, 10);
-  rounded(x() + w() - 120, y() + 5, 60, 21, p.soft, 4);
-  caption(panel.viewOnly ? "Monitor" : "Control", x() + w() - 120, y() + 5,
-    60, 21, p.accent, 10, true, FL_ALIGN_CENTER);
-  caption(owner_.focused(this) ? "<>" : "[ ]", x() + w() - 55, y() + 4, 22, 23, p.muted, 12, false, FL_ALIGN_CENTER);
-  caption("...", x() + w() - 29, y() + 1, 23, 23, p.muted, 17, true, FL_ALIGN_CENTER);
-  fl_color(p.border); fl_line(x() + 2, y() + 30, x() + w() - 3, y() + 30);
-  fl_color(fl_rgb_color(13, 22, 35)); fl_rectf(x() + 2, y() + 31, w() - 4, h() - 51);
+  return Fl_Widget::handle(event);
+}
+void Tile::draw() {
+  const auto p = owner_.colors(); bool chrome = !owner_.screensOnly();
+  if (chrome) {
+    fl_color(owner_.selected(this) ? p.accent : p.border); fl_rectf(x(), y(), w(), h());
+    fl_color(p.card); fl_rectf(x() + 1, y() + 1, w() - 2, 23);
+    Fl_Color status = session.live() ? p.green : session.status() == Session::State::Offline ? p.muted : p.amber;
+    fl_color(status); fl_pie(x() + 7, y() + 10, 6, 6, 0, 360);
+    int nameWidth = std::max(0, w() - 142);
+    if (w() >= 540) nameWidth -= 180;
+    caption(panel.name, x() + 18, y() + 1, nameWidth, 23, p.text, 12, true);
+    if (w() >= 540) caption(panel.address, x() + 20 + nameWidth, y() + 1, 175, 23, p.muted, 10);
+    rounded(x() + w() - 120, y() + 3, 60, 19, p.soft, 4);
+    caption(panel.viewOnly ? "Monitor" : "Control", x() + w() - 120, y() + 2, 60, 20, p.accent, 10, true, FL_ALIGN_CENTER);
+    caption(owner_.focused(this) ? "<>" : "[ ]", x() + w() - 55, y() + 1, 22, 23, p.muted, 12, false, FL_ALIGN_CENTER);
+    caption("...", x() + w() - 29, y() - 1, 23, 23, p.muted, 17, true, FL_ALIGN_CENTER);
+  }
+  fl_color(fl_rgb_color(13, 22, 35));
+  fl_rectf(x() + (chrome ? 1 : 0), y() + (chrome ? 25 : 0), w() - (chrome ? frameWidth : 0), h() - (chrome ? frameHeight : 0));
   if (session.live() && !session.pixels().empty()) {
     int left, top, width, height; imageRect(left, top, width, height);
     if (!image_ || generation_ != session.generation() || imageWidth_ != width || imageHeight_ != height) {
@@ -931,22 +1017,21 @@ void Tile::draw() {
     }
     image_->draw(left, top);
   } else {
-    caption(session.statusText(), x() + 16, y() + 39, w() - 32, (h() - 61) / 2,
+    caption(session.statusText(), x() + 12, y() + h() / 2 - 44, w() - 24, 28,
       fl_rgb_color(219, 229, 244), 16, true, FL_ALIGN_CENTER);
-    caption(session.error().empty() ? (session.wanted() ? "Waiting for the panel" : "Use Connect to open this panel") : session.error(),
-      x() + 16, y() + 39 + (h() - 61) / 2, w() - 32, (h() - 61) / 2 - 6,
+    caption(session.error().empty() ? (session.wanted() ? "Waiting for the panel" : panel.address) : session.error(),
+      x() + 12, y() + h() / 2 - 12, w() - 24, 44,
       fl_rgb_color(148, 163, 184), 12, false, FL_ALIGN_CENTER | FL_ALIGN_WRAP);
+    if (chrome && !session.wanted() && h() >= 160) {
+      rounded(x() + w() / 2 - 44, y() + h() / 2 + 38, 88, 26, p.soft, 7);
+      caption("Connect", x() + w() / 2 - 44, y() + h() / 2 + 38, 88, 26, p.accent, 11, true, FL_ALIGN_CENTER);
+    }
   }
-  Fl_Color status = session.live() ? p.green : session.status() == Session::State::Offline ? p.muted : p.amber;
-  fl_color(status); fl_pie(x() + 7, y() + h() - 13, 5, 5, 0, 360);
-  std::string statusText = session.statusText();
-  if (!panel.fit) statusText += "  /  " + std::to_string(panel.scale) + "%";
-  caption(statusText, x() + 17, y() + h() - 20, w() - 117, 19, status, 10);
-  caption(session.wanted() ? "Disconnect" : "Connect", x() + w() - 90, y() + h() - 20, 74, 19,
-    p.accent, 10, true, FL_ALIGN_CENTER);
-  fl_color(p.muted);
-  for (int i = 0; i < 3; ++i) fl_line(x() + w() - 7 - i * 4, y() + h() - 7,
-    x() + w() - 7, y() + h() - 7 - i * 4);
+  if (chrome && owner_.freePlacement() && !owner_.focused(this)) {
+    fl_color(p.muted);
+    for (int i = 0; i < 3; ++i) fl_line(x() + w() - 5 - i * 3, y() + h() - 5,
+      x() + w() - 5, y() + h() - 5 - i * 3);
+  }
 }
 unsigned Tile::mouseMask() const {
   int state = Fl::event_state();
@@ -958,6 +1043,7 @@ void Tile::sendPointer(unsigned mask) {
     static_cast<int>((Fl::event_y() - top) * static_cast<double>(session.height()) / height), mask);
 }
 int Tile::handle(int event) {
+  if (owner_.localKey(event)) return 1;
   switch (event) {
     case FL_FOCUS: redraw(); return 1;
     case FL_UNFOCUS: remoteFocus_ = false; session.releaseInput(); redraw(); return 1;
@@ -966,13 +1052,15 @@ int Tile::handle(int event) {
       remoteFocus_ = false;
       pressX_ = Fl::event_x(); pressY_ = Fl::event_y(); originalW_ = w(); originalH_ = h(); dragged_ = false;
       originalX_ = panel.pixelX; originalY_ = panel.pixelY;
-      if (hitRect(x() + w() - 15, y() + h() - 15, 15, 15)) gesture_ = Gesture::Resize;
-      else if (hitRect(x() + w() - 90, y() + h() - 20, 74, 20)) gesture_ = Gesture::Connect;
-      else if (hitRect(x(), y(), w(), 31)) {
+      if (!owner_.screensOnly() && owner_.freePlacement() && !owner_.focused(this) &&
+          hitRect(x() + w() - 15, y() + h() - 15, 15, 15)) gesture_ = Gesture::Resize;
+      else if (!owner_.screensOnly() && !session.wanted() && h() >= 160 &&
+               hitRect(x() + w() / 2 - 44, y() + h() / 2 + 38, 88, 26)) gesture_ = Gesture::Connect;
+      else if (!owner_.screensOnly() && hitRect(x(), y(), w(), 25)) {
         session.releaseInput();
-        if (hitRect(x() + w() - 29, y(), 25, 31)) gesture_ = Gesture::Menu;
-        else if (hitRect(x() + w() - 55, y(), 22, 31)) gesture_ = Gesture::Focus;
-        else if (hitRect(x() + w() - 120, y(), 60, 31)) gesture_ = Gesture::Mode;
+        if (hitRect(x() + w() - 29, y(), 25, 25)) gesture_ = Gesture::Menu;
+        else if (hitRect(x() + w() - 55, y(), 22, 25)) gesture_ = Gesture::Focus;
+        else if (hitRect(x() + w() - 120, y(), 60, 25)) gesture_ = Gesture::Mode;
         else gesture_ = Gesture::Header;
       } else {
         int left, top, width, height; imageRect(left, top, width, height);

@@ -28,20 +28,35 @@ struct Panel {
   int pixelX = 0, pixelY = 0, pixelWidth = 640, pixelHeight = 411;
   int displayWidth = 0, displayHeight = 0, displayPreset = 0, scale = 100;
   bool fit = true;
+  bool freePositioned = false;
 };
 
 struct Workspace {
-  int columns = 2, rowHeight = 0; // Zero fits the grid to the window.
+  int columns = 2, rowHeight = 0; // rowHeight is retained for older database readers.
   int width = 1320, height = 860;
   bool dark = false;
   Preset preset = Preset::CustomGrid;
+  std::vector<int> columnWeights, rowWeights;
   std::vector<Panel> panels;
 };
 
 struct Placement { int column, row, columns, rows; };
 std::vector<Placement> layout(const std::vector<Panel>& panels, int columns);
 void reorder(std::vector<Panel>& panels, size_t from, size_t to);
-void applyPreset(Workspace& workspace, Preset preset);
+void applyPreset(Workspace& workspace, Preset preset, bool resetDividers = true);
+struct Rect { int x, y, width, height; };
+struct DividerPlacement { Rect rect; bool vertical; int boundary; };
+struct GridGeometry {
+  std::vector<Rect> panels;
+  std::vector<int> columnSizes, rowSizes;
+  std::vector<DividerPlacement> dividers;
+  int width = 0, height = 0;
+};
+GridGeometry gridGeometry(const Workspace& workspace, int width, int height,
+                          int gap = 4, int minimumWidth = 160, int minimumHeight = 96);
+void resizeGridDivider(Workspace& workspace, bool vertical, int boundary,
+                       const std::vector<int>& initialSizes, int delta,
+                       int minimumSize);
 struct DisplaySize { const char* label; int width, height; };
 const std::vector<DisplaySize>& unifiedDisplaySizes();
 std::pair<int, int> scaledDisplaySize(const Panel& panel, int serverWidth = 0, int serverHeight = 0);

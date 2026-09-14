@@ -4,6 +4,7 @@
 #include "DashboardModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <random>
 #include <set>
@@ -99,18 +100,114 @@ void reorder(std::vector<Panel>& panels, size_t from, size_t to)
   panels.insert(panels.begin() + to, std::move(panel));
 }
 
-void applyPreset(Workspace& workspace, Preset preset)
+void applyPreset(Workspace& workspace, Preset preset, bool resetDividers)
 {
   workspace.preset = preset;
+  if (resetDividers) { workspace.columnWeights.clear(); workspace.rowWeights.clear(); }
   if (preset == Preset::Free || preset == Preset::CustomGrid) return;
   workspace.columns = preset == Preset::Single || preset == Preset::Stacked ? 1 :
                       preset == Preset::Grid6 || preset == Preset::Grid9 ? 3 : 2;
   workspace.rowHeight = 0;
   for (size_t index = 0; index < workspace.panels.size(); ++index) {
-    auto& panel = workspace.panels[index]; panel.columns = 1; panel.rows = 1; panel.fit = true;
+    auto& panel = workspace.panels[index]; panel.columns = 1; panel.rows = 1;
     if (preset == Preset::TopAndTwo && index % 3 == 0) panel.columns = 2;
     if (preset == Preset::LeftAndTwo && index % 3 == 0) panel.rows = 2;
   }
+}
+
+namespace {
+std::vector<int> distribute(int available, int count, const std::vector<int>& saved, int minimum) {
+  std::vector<int> weights = saved.size() == static_cast<size_t>(count) ? saved : std::vector<int>(count, 1);
+  double total = 0; for (auto& weight : weights) { weight = std::max(1, weight); total += weight; }
+  std::vector<int> sizes(count); double cumulative = 0; int used = 0;
+  for (int i = 0; i < count; ++i) {
+    cumulative += weights[i]; int end = static_cast<int>(std::round(available * cumulative / total));
+    sizes[i] = end - used; used = end;
+  }
+  for (auto& size : sizes) while (size < minimum) {
+    auto donor = std::max_element(sizes.begin(), sizes.end());
+    int amount = std::min(minimum - size, *donor - minimum);
+    if (amount <= 0) break;
+    *donor -= amount; size += amount;
+  }
+  return sizes;
+}
+std::vector<int> readWeights(const std::string& text) {
+  std::vector<int> result; std::istringstream input(text); std::string part;
+  while (std::getline(input, part, ',')) {
+    if (result.size() >= 128) throw std::runtime_error("Too many saved divider sizes");
+    size_t used; int value = std::stoi(part, &used);
+    if (used != part.size() || value < 1 || value > 1000000) throw std::runtime_error("Invalid saved divider size");
+    result.push_back(value);
+  }
+  return result;
+}
+std::string writeWeights(const std::vector<int>& weights) {
+  std::string result;
+  for (int weight : weights) { if (!result.empty()) result += ','; result += std::to_string(weight); }
+  return result;
+}
+}
+
+GridGeometry gridGeometry(const Workspace& workspace, int width, int height, int gap, int minimumWidth, int minimumHeight)
+{
+  GridGeometry result;
+  int columns = std::clamp(workspace.columns, 1, 4), rows = 1;
+  if (workspace.preset == Preset::Grid4 || workspace.preset == Preset::Grid6) rows = 2;
+  else if (workspace.preset == Preset::Grid9) rows = 3;
+  auto placements = layout(workspace.panels, columns);
+  for (const auto& p : placements) rows = std::max(rows, p.row + p.rows);
+  // A lone panel uses the whole workspace. More panels follow the selected
+  // arrangement without depending on their framebuffer or connection state.
+  if (placements.size() == 1) { columns = rows = 1; placements[0] = {0, 0, 1, 1}; }
+  result.width = std::max(width, columns * minimumWidth + (columns - 1) * gap);
+  result.height = std::max(height, rows * minimumHeight + (rows - 1) * gap);
+  result.columnSizes = distribute(result.width - (columns - 1) * gap, columns, workspace.columnWeights, minimumWidth);
+  result.rowSizes = distribute(result.height - (rows - 1) * gap, rows, workspace.rowWeights, minimumHeight);
+  std::vector<int> xs(columns + 1, 0), ys(rows + 1, 0);
+  for (int i = 0; i < columns; ++i) xs[i + 1] = xs[i] + result.columnSizes[i] + gap;
+  for (int i = 0; i < rows; ++i) ys[i + 1] = ys[i] + result.rowSizes[i] + gap;
+  std::vector<std::vector<int>> owners(rows, std::vector<int>(columns, -1));
+  for (size_t i = 0; i < placements.size(); ++i) {
+    const auto& p = placements[i];
+    result.panels.push_back({xs[p.column], ys[p.row], xs[p.column + p.columns] - xs[p.column] - gap,
+                            ys[p.row + p.rows] - ys[p.row] - gap});
+    for (int y = p.row; y < p.row + p.rows; ++y)
+      for (int x = p.column; x < p.column + p.columns; ++x) owners[y][x] = static_cast<int>(i);
+  }
+  for (int column = 0; column < columns - 1; ++column) {
+    int start = -1;
+    for (int row = 0; row <= rows; ++row) {
+      bool separates = row < rows && owners[row][column] >= 0 && owners[row][column + 1] >= 0 &&
+                       owners[row][column] != owners[row][column + 1];
+      if (separates && start < 0) start = row;
+      if (!separates && start >= 0) {
+        result.dividers.push_back({{xs[column + 1] - gap, ys[start], gap, ys[row] - ys[start] - gap}, true, column}); start = -1;
+      }
+    }
+  }
+  for (int row = 0; row < rows - 1; ++row) {
+    int start = -1;
+    for (int column = 0; column <= columns; ++column) {
+      bool separates = column < columns && owners[row][column] >= 0 && owners[row + 1][column] >= 0 &&
+                       owners[row][column] != owners[row + 1][column];
+      if (separates && start < 0) start = column;
+      if (!separates && start >= 0) {
+        result.dividers.push_back({{xs[start], ys[row + 1] - gap, xs[column] - xs[start] - gap, gap}, false, row}); start = -1;
+      }
+    }
+  }
+  return result;
+}
+
+void resizeGridDivider(Workspace& workspace, bool vertical, int boundary, const std::vector<int>& initialSizes, int delta, int minimumSize)
+{
+  if (boundary < 0 || boundary + 1 >= static_cast<int>(initialSizes.size())) return;
+  auto sizes = initialSizes; int total = sizes[boundary] + sizes[boundary + 1];
+  minimumSize = std::min(minimumSize, total / 2);
+  sizes[boundary] = std::clamp(initialSizes[boundary] + delta, minimumSize, total - minimumSize);
+  sizes[boundary + 1] = total - sizes[boundary];
+  (vertical ? workspace.columnWeights : workspace.rowWeights) = std::move(sizes);
 }
 
 const std::vector<DisplaySize>& unifiedDisplaySizes()
@@ -213,6 +310,8 @@ Workspace decodeWorkspace(const std::string& encoded)
       else if (key == "height") result.height = std::clamp(integer(value), 600, 4320);
       else if (key == "dark") result.dark = integer(value) != 0;
       else if (key == "preset") result.preset = static_cast<Preset>(std::clamp(integer(value), 0, 9));
+      else if (key == "columnWeights") result.columnWeights = readWeights(value);
+      else if (key == "rowWeights") result.rowWeights = readWeights(value);
     } else {
       if (key == "name") panel->name = hexDecode(value);
       else if (key == "address") panel->address = hexDecode(value);
@@ -237,9 +336,11 @@ Workspace decodeWorkspace(const std::string& encoded)
       else if (key == "displayPreset") panel->displayPreset = std::clamp(integer(value), 0, 6);
       else if (key == "scale") panel->scale = std::clamp(integer(value), 10, 200);
       else if (key == "fit") panel->fit = integer(value) != 0;
+      else if (key == "freePositioned") panel->freePositioned = integer(value) != 0;
     }
   }
   std::set<std::string> ids;
+  if (result.preset == Preset::Free) for (auto& item : result.panels) item.freePositioned = true;
   for (const Panel& item : result.panels) {
     validatePanel(item);
     if (!ids.insert(item.id).second) throw std::runtime_error("Duplicate connection identifier");
@@ -261,7 +362,8 @@ std::string encodeWorkspace(const Workspace& workspace)
   file << "SuperSmartClient Dashboard 1\n"
        << "columns=" << workspace.columns << "\nrowHeight=" << workspace.rowHeight
        << "\nwidth=" << workspace.width << "\nheight=" << workspace.height
-       << "\ndark=" << workspace.dark << "\npreset=" << static_cast<int>(workspace.preset) << '\n';
+       << "\ndark=" << workspace.dark << "\npreset=" << static_cast<int>(workspace.preset)
+       << "\ncolumnWeights=" << writeWeights(workspace.columnWeights) << "\nrowWeights=" << writeWeights(workspace.rowWeights) << '\n';
   for (const Panel& panel : workspace.panels) {
     const char* mode = panel.security == SecurityMode::Certificate ? "Certificate" :
                        panel.security == SecurityMode::AnonymousTLS ? "AnonymousTLS" : "Standard";
@@ -275,7 +377,7 @@ std::string encodeWorkspace(const Workspace& workspace)
          << "\npixelWidth=" << panel.pixelWidth << "\npixelHeight=" << panel.pixelHeight
          << "\ndisplayWidth=" << panel.displayWidth << "\ndisplayHeight=" << panel.displayHeight
          << "\ndisplayPreset=" << panel.displayPreset
-         << "\nscale=" << panel.scale << "\nfit=" << panel.fit << '\n';
+         << "\nscale=" << panel.scale << "\nfit=" << panel.fit << "\nfreePositioned=" << panel.freePositioned << '\n';
   }
   return file.str();
 }

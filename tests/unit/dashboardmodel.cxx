@@ -81,6 +81,98 @@ TEST_F(DashboardModel, PresetsPlacePanelsInTheirSelectedArrangement) {
   EXPECT_EQ(workspace.panels[0].id, firstId);
   EXPECT_EQ(workspace.rowHeight, 0);
 }
+TEST_F(DashboardModel, GridFillsViewportAndDividersRespectSpanningPanes) {
+  Workspace source; source.panels = {panel(), panel(), panel()};
+  applyPreset(source, Preset::TopAndTwo);
+  auto grid = gridGeometry(source, 1312, 812);
+  ASSERT_EQ(grid.panels.size(), 3u);
+  EXPECT_EQ(grid.width, 1312); EXPECT_EQ(grid.height, 812);
+  EXPECT_EQ(grid.panels[0].width, 1312); EXPECT_EQ(grid.panels[0].height, 404);
+  EXPECT_EQ(grid.panels[1].x, 0); EXPECT_EQ(grid.panels[1].y, 408);
+  EXPECT_EQ(grid.panels[2].x, 658); EXPECT_EQ(grid.panels[2].width, 654);
+  EXPECT_EQ(grid.panels[2].y + grid.panels[2].height, 812);
+  ASSERT_EQ(grid.dividers.size(), 2u);
+  for (const auto& divider : grid.dividers) {
+    if (divider.vertical) { EXPECT_EQ(divider.rect.y, 408); EXPECT_EQ(divider.rect.height, 404); }
+    else { EXPECT_EQ(divider.rect.y, 404); EXPECT_EQ(divider.rect.width, 1312); }
+  }
+  // Resolution, scale, and old fixed-height settings do not influence grids.
+  source.panels[0].displayWidth = 1920; source.panels[0].displayHeight = 1080;
+  source.panels[1].scale = 35; source.panels[1].fit = false; source.rowHeight = 500;
+  auto unchanged = gridGeometry(source, 1312, 812);
+  for (size_t number = 0; number < grid.panels.size(); ++number) {
+    EXPECT_EQ(unchanged.panels[number].x, grid.panels[number].x);
+    EXPECT_EQ(unchanged.panels[number].y, grid.panels[number].y);
+    EXPECT_EQ(unchanged.panels[number].width, grid.panels[number].width);
+    EXPECT_EQ(unchanged.panels[number].height, grid.panels[number].height);
+  }
+  source.panels.resize(1);
+  auto single = gridGeometry(source, 1312, 812);
+  EXPECT_EQ(single.panels[0].width, 1312); EXPECT_EQ(single.panels[0].height, 812);
+  EXPECT_TRUE(single.dividers.empty());
+}
+TEST_F(DashboardModel, DividerResizingPreservesAdjacentTotalsAndSurvivesSave) {
+  Workspace source; source.panels = {panel(), panel(), panel(), panel(), panel(), panel()};
+  applyPreset(source, Preset::Grid6);
+  auto before = gridGeometry(source, 1312, 812);
+  resizeGridDivider(source, true, 0, before.columnSizes, 80, 160);
+  resizeGridDivider(source, false, 0, before.rowSizes, -90, 96);
+  auto saved = decodeWorkspace(encodeWorkspace(source));
+  auto after = gridGeometry(saved, 1312, 812);
+  EXPECT_EQ(after.columnSizes[0], before.columnSizes[0] + 80);
+  EXPECT_EQ(after.columnSizes[1], before.columnSizes[1] - 80);
+  EXPECT_EQ(after.columnSizes[2], before.columnSizes[2]);
+  EXPECT_EQ(after.rowSizes[0], before.rowSizes[0] - 90);
+  EXPECT_EQ(after.rowSizes[1], before.rowSizes[1] + 90);
+  reorder(saved.panels, 0, 1); applyPreset(saved, Preset::Grid6, false);
+  EXPECT_EQ(gridGeometry(saved, 1312, 812).columnSizes, after.columnSizes);
+  resizeGridDivider(saved, true, 0, before.columnSizes, 100000, 160);
+  EXPECT_EQ(gridGeometry(saved, 1312, 812).columnSizes[1], 160);
+  applyPreset(saved, Preset::Stacked);
+  EXPECT_TRUE(saved.columnWeights.empty()); EXPECT_TRUE(saved.rowWeights.empty());
+}
+TEST_F(DashboardModel, FixedGridPresetsKeepTheirDeclaredRows) {
+  Workspace source; source.panels = {panel(), panel(), panel(), panel()};
+  for (auto preset : {Preset::Grid4, Preset::Grid6, Preset::Grid9}) {
+    applyPreset(source, preset);
+    auto grid = gridGeometry(source, 1312, 812);
+    EXPECT_EQ(grid.columnSizes.size(), preset == Preset::Grid4 ? 2u : 3u);
+    EXPECT_EQ(grid.rowSizes.size(), preset == Preset::Grid9 ? 3u : 2u);
+  }
+}
+TEST_F(DashboardModel, GridRatiosScaleWithViewportWithoutRoundingGaps) {
+  Workspace source; source.panels = {panel(), panel(), panel(), panel()};
+  applyPreset(source, Preset::Grid4); source.columnWeights = {3, 2}; source.rowWeights = {2, 3};
+  for (auto size : {std::make_pair(857, 547), std::make_pair(1920, 1080), std::make_pair(3840, 2160)}) {
+    auto grid = gridGeometry(source, size.first, size.second);
+    EXPECT_EQ(grid.panels[3].x + grid.panels[3].width, size.first);
+    EXPECT_EQ(grid.panels[3].y + grid.panels[3].height, size.second);
+    EXPECT_NEAR(grid.columnSizes[0] / static_cast<double>(size.first - 4), 0.6, 0.002);
+    EXPECT_NEAR(grid.rowSizes[0] / static_cast<double>(size.second - 4), 0.4, 0.002);
+  }
+  source.panels.resize(32, panel()); applyPreset(source, Preset::Stacked);
+  auto full = gridGeometry(source, 1600, 1000, 2, 1, 1);
+  EXPECT_EQ(full.panels.back().y + full.panels.back().height, 1000);
+  auto windowed = gridGeometry(source, 852, 552);
+  EXPECT_GE(windowed.rowSizes.back(), 96); EXPECT_GT(windowed.height, 552);
+}
+TEST_F(DashboardModel, GridTransitionsPreserveFreeWindowGeometryAndScale) {
+  Workspace source; auto item = panel(); item.pixelX = 85; item.pixelY = 126;
+  item.pixelWidth = 642; item.pixelHeight = 426; item.scale = 50;
+  item.displayWidth = 1280; item.displayHeight = 800; item.fit = false; item.freePositioned = true;
+  source.panels.push_back(item);
+  for (auto preset : {Preset::TopAndTwo, Preset::Grid4, Preset::SideBySide, Preset::Free}) {
+    applyPreset(source, preset); source = decodeWorkspace(encodeWorkspace(source));
+    EXPECT_EQ(source.panels[0].pixelX, 85); EXPECT_EQ(source.panels[0].pixelY, 126);
+    EXPECT_EQ(source.panels[0].pixelWidth, 642); EXPECT_EQ(source.panels[0].pixelHeight, 426);
+    EXPECT_EQ(source.panels[0].scale, 50); EXPECT_FALSE(source.panels[0].fit);
+    EXPECT_TRUE(source.panels[0].freePositioned);
+  }
+  // Older free layouts do not carry the positioning flag, but must still restore.
+  auto legacy = encodeWorkspace(source); auto flag = legacy.find("freePositioned=1");
+  legacy.erase(flag, std::string("freePositioned=1\n").size());
+  EXPECT_TRUE(decodeWorkspace(legacy).panels[0].freePositioned);
+}
 TEST_F(DashboardModel, IndividualScaleUsesNativeOrSelectedSiemensResolution) {
   auto first = panel(), second = panel();
   first.displayWidth = 1280; first.displayHeight = 800; first.scale = 50;

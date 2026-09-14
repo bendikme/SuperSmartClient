@@ -353,6 +353,29 @@ class DashboardTests(unittest.TestCase):
         self.xdo("mouseup", 1)
         time.sleep(0.2)
 
+    def choose_preset(self, window, value):
+        settings = dict(line.split("=", 1) for line in database_layout(self.db).split("[panel ")[0].splitlines() if "=" in line)
+        current = int(settings.get("preset", 0))
+        self.click(window, 310, 20)
+        steps = ["Down" if value > current else "Up"] * abs(value - current)
+        self.xdo("key", *steps, "Return")
+        wait_for(lambda: f"preset={value}\n" in database_layout(self.db), "Arrangement selection was not saved")
+
+    def picture(self, window, suffix):
+        path = str(SCREENSHOT) + suffix if SCREENSHOT else str(self.case_dir / (suffix + ".png"))
+        time.sleep(0.15)
+        return capture_window(window, path)
+
+    @staticmethod
+    def pixel(picture, x, y):
+        _, _, raw, stride = picture
+        offset = y * stride + x * 4
+        return tuple(raw[offset + channel] for channel in (2, 1, 0))
+
+    def geometry(self, window):
+        return {key: int(value) for key, value in (line.split("=", 1) for line in
+                self.xdo("getwindowgeometry", "--shell", window).splitlines()) if key in ("X", "Y", "WIDTH", "HEIGHT")}
+
     def test_grid_order_size_focus_and_layout_dropdown(self):
         self.require_input()
         first, second, third = self.server(), self.server(), self.server()
@@ -364,20 +387,21 @@ class DashboardTests(unittest.TestCase):
             window = self.window()
             if SCREENSHOT:
                 capture_window(window, str(SCREENSHOT) + ".grid.png")
-            self.drag(window, 70, 118, 720, 118)
+            self.drag(window, 70, 56, 720, 56)
             encoded = database_layout(self.db)
             self.assertLess(encoded.index(profiles[1]["id"]), encoded.index(profiles[0]["id"]))
-            self.drag(window, 649, 356, 1300, 356)
+            self.drag(window, 660, 450, 790, 450)
             encoded = database_layout(self.db)
-            self.assertIn("columns=2", encoded.split("[panel ")[1])
+            self.assertIn("columnWeights=784,524", encoded)
+            self.assertEqual([p["columns"] for p in saved_profiles(self.db)], ["1", "1"])
             self.assertEqual(first.inputs + second.inputs, [], "Grid gestures reached a panel")
-            self.click(window, 70, 118)
+            self.click(window, 70, 56)
             self.xdo("click", "--window", window, "--repeat", 2, "--delay", 100, 1)
             time.sleep(0.2)
-            self.click(window, 650, 80)  # Back to grid
+            self.click(window, 640, 20)  # Overview
             # Select the next named layout. The saved startup flag is false;
             # opening the layout must nevertheless connect the whole group.
-            self.click(window, 430, 30)
+            self.click(window, 130, 20)
             self.xdo("key", "Down", "Return")
             if SCREENSHOT:
                 time.sleep(0.2)
@@ -395,12 +419,12 @@ class DashboardTests(unittest.TestCase):
         with self.viewer():
             wait_for(lambda: control.frames > 2 and monitor.frames > 2, "Panels did not stream")
             window = self.window()
-            self.click(window, 333, 240)
+            self.click(window, 333, 450)
             self.xdo("key", "--window", window, "a")
             wait_for(lambda: ("key", 1, ord("a")) in control.inputs and ("key", 0, ord("a")) in control.inputs,
                      "Control tile did not forward key press/release")
             self.assertTrue(any(event[0] == "pointer" and event[1] & 1 for event in control.inputs))
-            self.click(window, 988, 240)
+            self.click(window, 988, 450)
             self.xdo("key", "--window", window, "b")
             time.sleep(0.3)
             self.assertEqual(monitor.inputs, [], "Monitor tile forwarded input")
@@ -411,7 +435,7 @@ class DashboardTests(unittest.TestCase):
         create_database(self.db, [("New workspace", [])])
         with self.viewer():
             window = self.window()
-            self.click(window, 1250, 29)
+            self.click(window, 465, 20)
             editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
                               "--name", "Add panel - SuperSmartClient").splitlines()[0]
             self.assertEqual(int(self.xdo("getwindowpid", editor)), self.process.pid)
@@ -459,7 +483,7 @@ class DashboardTests(unittest.TestCase):
         create_database(self.db, [("Original", [])])
         with self.viewer():
             window = self.window()
-            self.click(window, 615, 29)
+            self.click(window, 553, 20)
             # Open the second menu entry, Save layout as.
             self.xdo("key", "Down", "Return")
             self.xdo("type", "--delay", 1, "Saved copy")
@@ -475,7 +499,8 @@ class DashboardTests(unittest.TestCase):
         with self.viewer():
             window = self.window()
             self.xdo("windowmove", window, 120, 100)
-            self.click(window, 1250, 80)  # Dark theme, on our isolated empty dashboard.
+            self.click(window, 1298, 20)  # Workspace actions on the isolated empty dashboard.
+            self.xdo("key", "Down", "Down", "Down", "Return")  # Dark theme.
             def picture(target, suffix):
                 path = str(SCREENSHOT) + suffix if SCREENSHOT else str(self.case_dir / (suffix + ".png"))
                 return capture_window(target, path)
@@ -486,23 +511,23 @@ class DashboardTests(unittest.TestCase):
                 return tuple(raw[offset + channel] for channel in (2, 1, 0))
             time.sleep(0.15)
             dark = picture(window, ".dark.png")
-            self.assertEqual(pixel(dark, 500, 20), (30, 41, 59), "Layout field is not dark")
-            self.assertEqual(pixel(dark, 240, 70), (30, 41, 59), "Arrangement field is not dark")
-            self.assertEqual(pixel(dark, 1199, 14), (19, 33, 53), "Button corner is square")
-            self.assertEqual(pixel(dark, 1220, 16), (37, 99, 235), "Primary button fill is wrong")
+            self.assertEqual(pixel(dark, 200, 10), (30, 41, 59), "Layout field is not dark")
+            self.assertEqual(pixel(dark, 260, 10), (30, 41, 59), "Arrangement field is not dark")
+            self.assertEqual(pixel(dark, 418, 5), (30, 41, 59), "Button corner is square")
+            self.assertEqual(pixel(dark, 460, 7), (37, 99, 235), "Primary button fill is wrong")
             visible = root_windows()
-            self.click(window, 615, 29)
+            self.click(window, 553, 20)
             popups = root_windows() - visible
             def geometry(target):
                 return dict(line.split("=", 1) for line in self.xdo("getwindowgeometry", "--shell", target).splitlines())
             menu = next(target for target in popups if int(geometry(target)["HEIGHT"]) > 100)
             parent_bounds, menu_bounds = geometry(window), geometry(menu)
-            self.assertAlmostEqual(int(menu_bounds["X"]), int(parent_bounds["X"]) + 572, delta=3)
-            self.assertAlmostEqual(int(menu_bounds["Y"]), int(parent_bounds["Y"]) + 45, delta=3)
+            self.assertAlmostEqual(int(menu_bounds["X"]), int(parent_bounds["X"]) + 518, delta=3)
+            self.assertAlmostEqual(int(menu_bounds["Y"]), int(parent_bounds["Y"]) + 35, delta=3)
             popup = picture(menu, ".menu.png")
             self.assertLess(max(pixel(popup, 3, 3)), 100, "Dark popup has a light background")
             self.xdo("key", "Escape")
-            self.click(window, 1250, 29)
+            self.click(window, 465, 20)
             editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
                               "--name", "Add panel - SuperSmartClient").splitlines()[0]
             time.sleep(0.1)
@@ -520,7 +545,7 @@ class DashboardTests(unittest.TestCase):
         with self.viewer():
             wait_for(lambda: all(server.frames > 2 for server in servers), "Panels did not stream")
             window = self.window()
-            self.click(window, 160, 80)
+            self.click(window, 310, 20)
             self.xdo("key", "Down", "Down", "Down", "Down", "Return")
             wait_for(lambda: "preset=4\n" in database_layout(self.db), "Three-panel preset was not saved")
             saved = saved_profiles(self.db)
@@ -529,11 +554,11 @@ class DashboardTests(unittest.TestCase):
                 time.sleep(0.2)
                 capture_window(window, str(SCREENSHOT) + ".three.png")
             # Reordering keeps the preset shape, moving a different panel into the top slot.
-            self.drag(window, 70, 118, 80, 487)
+            self.drag(window, 70, 56, 80, 464)
             saved = saved_profiles(self.db)
             self.assertEqual(saved[0]["name"], profiles[1]["name"].encode().hex())
             self.assertEqual([p["columns"] for p in saved], ["2", "1", "1"])
-            self.click(window, 70, 118)
+            self.click(window, 70, 56)
             self.xdo("key", "a")  # Header selection must not focus the HMI keyboard.
             time.sleep(0.15)
             self.assertEqual([event for server in servers for event in server.inputs], [])
@@ -546,7 +571,7 @@ class DashboardTests(unittest.TestCase):
         with self.viewer():
             wait_for(lambda: first.frames > 2 and second.frames > 2, "Panels did not stream")
             window = self.window()
-            self.click(window, 640, 118)  # First tile's local menu.
+            self.click(window, 643, 56)  # First tile's local menu.
             self.xdo("key", *(7 * ["Down"]), "Return")
             dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
                                "--name", "Panel size and scale").splitlines()[0]
@@ -565,13 +590,13 @@ class DashboardTests(unittest.TestCase):
                 return next(p for p in saved_profiles(self.db) if p["name"] == name.encode().hex())
             saved = by_name(profiles[0]["name"])
             self.assertEqual((saved["displayPreset"], saved["scale"], saved["fit"]), ("3", "50", "0"))
-            self.assertEqual((saved["pixelWidth"], saved["pixelHeight"]), ("644", "451"))
+            self.assertEqual((saved["pixelWidth"], saved["pixelHeight"]), ("642", "426"))
             self.assertEqual(by_name(profiles[1]["name"])["scale"], "100")
-            # The scaled viewport is exactly 640 x 400, plus four border pixels and 51 chrome pixels.
-            self.drag(window, 60, 118, 90, 168)
+            # The scaled viewport is exactly 640 x 400, plus two border pixels and 26 chrome pixels.
+            self.drag(window, 60, 56, 90, 106)
             saved = by_name(profiles[0]["name"])
             self.assertEqual((saved["pixelX"], saved["pixelY"]), ("30", "50"))
-            self.assertEqual((saved["pixelWidth"], saved["pixelHeight"]), ("644", "451"))
+            self.assertEqual((saved["pixelWidth"], saved["pixelHeight"]), ("642", "426"))
             if SCREENSHOT:
                 time.sleep(0.2)
                 capture_window(window, str(SCREENSHOT) + ".scaled.png")
@@ -582,16 +607,136 @@ class DashboardTests(unittest.TestCase):
                      "Scaled layout did not reconnect and display new frames")
             window = self.window()
             # Coordinates map from the 640 x 400 picture to the fixture's 320 x 200 framebuffer.
-            self.click(window, 360, 385)
+            self.click(window, 355, 319)
             wait_for(lambda: any(event[0] == "pointer" and event[1] == 1 for event in first.inputs),
                      "Restored scaled view did not accept control input")
             down = next(event for event in first.inputs if event[0] == "pointer" and event[1] == 1)
             self.assertEqual(down[2:], (160, 100))
             # Freely resizing returns this view to Fit; the other window retains its settings.
-            self.drag(window, 674, 596, 734, 636)
+            self.drag(window, 671, 515, 731, 555)
             resized = next(p for p in saved_profiles(self.db) if p["name"] == profiles[0]["name"].encode().hex())
-            self.assertEqual((resized["pixelWidth"], resized["pixelHeight"], resized["fit"]), ("704", "491", "1"))
+            self.assertEqual((resized["pixelWidth"], resized["pixelHeight"], resized["fit"]), ("702", "466", "1"))
             self.assertEqual(second.inputs, [])
+
+    def test_arrangement_dividers_are_stable_across_resolution_reconnect_and_restart(self):
+        self.require_input()
+        servers = [self.server(size=size) for size in [(320, 200), (480, 270), (240, 320)]]
+        create_database(self.db, [("Mixed aspect ratios", [panel_profile(server, str(index)) for index, server in enumerate(servers)])])
+        with self.viewer():
+            wait_for(lambda: all(server.frames > 2 for server in servers), "Panels did not stream")
+            window = self.window()
+            self.xdo("windowmove", window, 90, 60)
+            original = self.geometry(window)
+            border, gap = (220, 227, 236), (242, 245, 249)
+            for preset in (4, 5, 3, 2, 6, 4):
+                self.choose_preset(window, preset)
+                self.assertEqual(self.geometry(window), original, "Arrangement changed the application window")
+            picture = self.picture(window, ".stable-grid.png")
+            self.assertEqual(self.pixel(picture, 100, 447), border)
+            self.assertEqual(self.pixel(picture, 100, 450), gap)
+            self.assertEqual(self.pixel(picture, 658, 500), gap)
+            self.drag(window, 100, 450, 100, 350)
+            self.drag(window, 660, 500, 760, 500)
+            encoded = database_layout(self.db)
+            self.assertIn("rowWeights=304,504", encoded)
+            self.assertIn("columnWeights=754,554", encoded)
+            # Reordering changes the screen in a slot, preserving the dividers.
+            self.drag(window, 70, 56, 80, 364)
+            self.assertIn("rowWeights=304,504", database_layout(self.db))
+            servers[0].size = (640, 360)
+            before = servers[0].frames
+            servers[0].drop.set()
+            wait_for(lambda: servers[0].authentications == 2 and servers[0].frames > before + 2,
+                     "Changed resolution did not reconnect")
+            picture = self.picture(window, ".dividers.png")
+            self.assertEqual(self.pixel(picture, 100, 350), gap)
+            self.assertEqual(self.pixel(picture, 760, 500), gap)
+            self.assertEqual(self.geometry(window), original)
+            self.assertEqual([event for server in servers for event in server.inputs], [])
+        counts = [server.frames for server in servers]
+        with self.viewer():
+            wait_for(lambda: all(server.frames > before + 2 for server, before in zip(servers, counts)), "Saved grid did not reopen")
+            picture = self.picture(self.window(), ".restored-grid.png")
+            self.assertEqual(self.pixel(picture, 100, 350), gap)
+            self.assertEqual(self.pixel(picture, 760, 500), gap)
+
+    def test_fullscreen_hides_chrome_consumes_shortcuts_and_restores_window(self):
+        self.require_input()
+        servers = [self.server(size=(320, 400)), self.server(size=(320, 400))]
+        create_database(self.db, [("Screens only", [panel_profile(server, str(index)) for index, server in enumerate(servers)])])
+        with self.viewer():
+            wait_for(lambda: all(server.frames > 2 for server in servers), "Panels did not stream")
+            window = self.window()
+            self.xdo("windowmove", window, 70, 80)
+            self.xdo("windowsize", window, 1160, 780)
+            time.sleep(0.15)
+            original = self.geometry(window)
+            self.click(window, 300, 420)  # Only the simulated panel receives this input.
+            self.xdo("keydown", "a")
+            wait_for(lambda: ("key", 1, ord("a")) in servers[0].inputs, "Fixture did not take keyboard focus")
+            self.xdo("key", "F11")
+            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Fullscreen did not cover the test display")
+            self.xdo("keyup", "a")
+            wait_for(lambda: ("key", 0, ord("a")) in servers[0].inputs, "Fullscreen left a remote key held")
+            full = self.picture(window, ".fullscreen.png")
+            self.assertEqual(full[:2], (1600, 1000))
+            for x in (40, 450, 850, 1200):
+                self.assertEqual(self.pixel(full, x, 12), (35, 72, 111), "Toolbar or panel header remains in fullscreen")
+            self.assertEqual(self.pixel(full, 100, 998), (244, 247, 250), "Footer remains in fullscreen")
+            self.click(window, 200, 500)
+            self.xdo("key", "Escape")
+            wait_for(lambda: self.geometry(window) == original, "Escape did not restore window bounds")
+            self.assertFalse(any(event[0] == "key" and event[2] in (0xffc8, 0xff1b)
+                                 for server in servers for event in server.inputs), "Fullscreen shortcuts reached a panel")
+            # The visible exit button consumes its entire click, including release.
+            self.click(window, 1070, 20)
+            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Fullscreen button did not enter")
+            before = sum(len(server.inputs) for server in servers)
+            self.click(window, 1579, 18)
+            wait_for(lambda: self.geometry(window) == original, "Exit button did not restore window bounds")
+            self.assertEqual(sum(len(server.inputs) for server in servers), before)
+            self.assertEqual([server.connections for server in servers], [1, 1])
+            # Auto-repeat must not toggle repeatedly while the key is held.
+            self.xdo("keydown", "F11", "keydown", "F11")
+            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Repeated F11 toggled back out")
+            self.xdo("keyup", "F11")
+            self.xdo("key", "F11")
+            wait_for(lambda: self.geometry(window) == original, "F11 did not restore after repeat")
+            encoded = database_layout(self.db)
+            self.assertIn("width=1160", encoded)
+            self.assertIn("height=780", encoded)
+            self.assertNotIn("width=1600", encoded)
+            self.assertNotIn("height=1000", encoded)
+
+    def test_free_positions_and_scale_restore_after_grid_and_fullscreen(self):
+        self.require_input()
+        servers = [self.server(size=(320, 200)), self.server(size=(320, 200))]
+        profiles = [panel_profile(server, str(index)) for index, server in enumerate(servers)]
+        for index, profile in enumerate(profiles):
+            profile.update(pixelX=20 + index * 665, pixelY=25 + index * 40, pixelWidth=642, pixelHeight=426,
+                           displayWidth=1280, displayHeight=800, displayPreset=3, scale=50, fit=0, freePositioned=1)
+        create_database(self.db, [("Preserve free views", profiles)])
+        with self.viewer():
+            wait_for(lambda: all(server.frames > 2 for server in servers), "Panels did not stream")
+            window = self.window()
+            self.choose_preset(window, 9)
+            original = saved_profiles(self.db)
+            for preset in (4, 3, 2, 9):
+                self.choose_preset(window, preset)
+                for before, after in zip(original, saved_profiles(self.db)):
+                    for key in ("pixelX", "pixelY", "pixelWidth", "pixelHeight", "fit", "scale", "displayPreset"):
+                        self.assertEqual(after[key], before[key], f"Arrangement changed saved {key}")
+            self.xdo("key", "F11")
+            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Free layout did not enter fullscreen")
+            self.picture(window, ".free-fullscreen.png")
+            self.xdo("key", "Escape")
+            wait_for(lambda: self.geometry(window)["WIDTH"] == 1320, "Free layout did not restore")
+            self.choose_preset(window, 2)
+            self.choose_preset(window, 9)
+            for before, after in zip(original, saved_profiles(self.db)):
+                for key in ("pixelX", "pixelY", "pixelWidth", "pixelHeight", "fit", "scale", "displayPreset"):
+                    self.assertEqual(after[key], before[key], f"Fullscreen changed saved {key}")
+            self.assertEqual([event for server in servers for event in server.inputs], [])
 
 
 def root_windows():

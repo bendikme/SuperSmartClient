@@ -42,28 +42,37 @@ headers, so the native Windows viewer builds with the current MSYS2 toolchain.
 
 - View up to **32 panels** in one window with **1–4 grid columns**. Each panel has
   its own TLS connection, credentials, framebuffer and reconnect state.
-- Drag a panel's header to reorder it. Drag the bottom-right corner to change
-  its width or height in grid cells. The **...** menu also offers **Move earlier**
-  and **Move later**. Resizing a view never changes the HMI's resolution.
-- **Arrange** offers single, side-by-side, stacked, top-and-two-below,
-  left-and-two-right, and 2-by-2, 3-by-2 and 3-by-3 grid presets. Additional
-  panels continue below the selected arrangement. Dragging a corner switches
-  to a custom grid. **Free placement** allows independent window positions
-  and sizes; selecting an overlapping window brings it to the front.
-- **Fit window** sizes the grid to the available area. Compact, Comfortable and
-  Large set a fixed row height. Borders are one pixel, gaps are six pixels, and
-  panel headers and status bars are compact. Pictures retain their aspect ratio.
-- Double-click a header, or use its **[ ]** button, to focus one panel. **Back to
-  grid** restores the layout while the other connections remain active.
+- Drag a panel's header to reorder it. Drag the thin dividers between grid panes
+  to resize adjacent panes; double-click a divider to reset the proportions.
+  The **...** menu also offers **Move earlier** and **Move later**.
+  Resizing a view never changes the HMI's resolution.
+- The arrangement dropdown offers a single column, side-by-side, stacked,
+  top-and-two-below, left-and-two-right, and 2-by-2, 3-by-2 and 3-by-3 grids.
+  Extra panels continue below. **Free placement** restores independent saved
+  window positions and sizes; drag a header to move a window or its corner
+  to resize it. Selecting an overlapping window brings it to the front.
+- Grids fill the available workspace and retain their divider proportions when
+  the application resizes. Connecting, reconnecting or changing a panel's
+  resolution does not move grid boundaries. Pictures keep their aspect ratio.
+- The toolbar uses one 40-pixel row. Panel headers are 24 pixels high, with
+  one-pixel borders and four-pixel gaps; there are no panel footers.
+- Double-click a header, or use its **[ ]** button, to focus one panel.
+  **Overview** restores the arrangement while other connections remain active.
+- **Full screen** or **F11** fills the display with panel pictures, hiding the
+  toolbar and all panel chrome. A small **x** button in the top-right corner,
+  **F11**, or **Esc** restores the window. These shortcuts stay local. Fullscreen
+  temporarily fits the pictures without changing saved scaling, positions or
+  divider proportions. All connections continue streaming.
 - Use the **Control / Monitor** button on each panel to choose its input mode.
   A panel's **...** menu provides editing, reconnect, refresh and removal.
-- Choose **Layouts... > Save layout as...** to name a complete arrangement.
+- Choose **Layouts > Save layout as...** to name a complete arrangement.
   **New empty layout** starts another group. Up to **100 layouts** are supported.
   Changes to the current layout are saved automatically.
 - Selecting a name in the **Layout dropdown** opens and connects the entire
   group. Connections in the previous layout close. On app startup, the last
   active layout reopens, respecting each panel's **Connect on startup** setting.
-- Use **Light theme / Dark theme** to change the appearance.
+- The toolbar **...** menu contains **Connect all**, **Disconnect all**,
+  **Reset pane divisions**, **Light theme / Dark theme**, and custom column counts.
 - Roboto regular, bold and italic fonts are bundled and used throughout the
   application UI. They are loaded privately for this app, without installing
   fonts into Windows or changing the panel's own display.
@@ -107,8 +116,9 @@ For example, MTP1200 at 50% gives a **640 x 400 picture area**, with the compact
 header and border added outside it. Each panel keeps its own percentage and
 screen preset. Fixed sizes switch the workspace to free placement so grid
 cells do not override the requested dimensions. Dragging a corner enables Fit
-for that panel; selecting a grid preset enables Fit for the grid. A temporary
-focused view fills the workspace and restores the saved scale when closed.
+for that panel. Grids fit the pictures while preserving each free window's
+scale and geometry. Focused and fullscreen views temporarily fit the available
+area; the saved scale returns when you leave those views.
 
 All positions, sizes, percentages and screen presets survive restart, layout
 selection and database export/import. Scaling is local to the viewer. The
