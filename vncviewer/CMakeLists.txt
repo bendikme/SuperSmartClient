@@ -2,7 +2,34 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(FATAL_ERROR "cmake must be invoked with the top level directory")
 endif()
 
+find_package(SQLite3 REQUIRED)
+add_library(dashboard_support STATIC DashboardModel.cxx DashboardSecrets.cxx DashboardStore.cxx)
+target_compile_features(dashboard_support PUBLIC cxx_std_17)
+# The upstream project specifies -std=gnu++11 in CMAKE_CXX_FLAGS.
+target_compile_options(dashboard_support PUBLIC $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++17>)
+target_include_directories(dashboard_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/common)
+target_link_libraries(dashboard_support PUBLIC network SQLite::SQLite3)
+if(GNUTLS_FOUND)
+  target_include_directories(dashboard_support SYSTEM PRIVATE ${GNUTLS_INCLUDE_DIR})
+  target_link_libraries(dashboard_support PRIVATE ${GNUTLS_LIBRARIES})
+endif()
+if(WIN32)
+  target_link_libraries(dashboard_support PUBLIC crypt32 shell32 ole32)
+elseif(UNIX AND NOT APPLE)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(LIBSECRET QUIET IMPORTED_TARGET libsecret-1)
+    if(LIBSECRET_FOUND)
+      target_compile_definitions(dashboard_support PRIVATE HAVE_LIBSECRET)
+      target_link_libraries(dashboard_support PRIVATE PkgConfig::LIBSECRET)
+    endif()
+  endif()
+endif()
+
 add_executable(vncviewer
+  AppFont.cxx
+  Dashboard.cxx
+  DashboardSession.cxx
   fltk/Fl_Monitor_Arrangement.cxx
   fltk/Fl_Suggestion_Item_.cxx
   fltk/Fl_Suggestion_Window_.cxx
@@ -26,6 +53,12 @@ add_executable(vncviewer
   MonitorIndicesParameter.cxx
   vncviewer.cxx)
 
+add_custom_command(TARGET vncviewer POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_SOURCE_DIR}/media/fonts/roboto $<TARGET_FILE_DIR:vncviewer>/fonts)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/media/fonts/roboto/
+  DESTINATION ${CMAKE_INSTALL_FULL_DATADIR}/supersmartclient/fonts)
+
 if(WIN32 AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
   set_target_properties(vncviewer PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
@@ -47,6 +80,7 @@ elseif(APPLE)
   target_sources(vncviewer PRIVATE KeyboardMacOS.mm osx_to_qnum.c keysym2ucs.c)
   target_sources(vncviewer PRIVATE Surface_OSX.cxx)
 else()
+  target_sources(vncviewer PRIVATE keysym2ucs.c)
   target_sources(vncviewer PRIVATE GestureHandler.cxx XInputTouchHandler.cxx)
   target_sources(vncviewer PRIVATE KeyboardX11.cxx xkb_to_qnum.c)
   target_sources(vncviewer PRIVATE Surface_X11.cxx)
@@ -55,16 +89,19 @@ endif()
 target_include_directories(vncviewer SYSTEM PUBLIC ${FLTK_INCLUDE_DIR})
 target_include_directories(vncviewer SYSTEM PUBLIC ${Intl_INCLUDE_DIR})
 target_include_directories(vncviewer PUBLIC ${CMAKE_SOURCE_DIR}/common)
-target_link_libraries(vncviewer core rfb network rdr)
+target_link_libraries(vncviewer core rfb network rdr dashboard_support)
 target_link_libraries(vncviewer ${FLTK_LIBRARIES} ${Intl_LIBRARIES})
 
 if(WIN32)
   target_link_libraries(vncviewer msimg32)
 elseif(APPLE)
   target_link_libraries(vncviewer "-framework Cocoa")
+  target_link_libraries(vncviewer "-framework CoreText")
   target_link_libraries(vncviewer "-framework Carbon")
   target_link_libraries(vncviewer "-framework IOKit")
 else()
+  find_package(Fontconfig REQUIRED)
+  target_link_libraries(vncviewer Fontconfig::Fontconfig)
   target_link_libraries(vncviewer ${X11_Xi_LIB})
 
   if(X11_Xrandr_LIB)

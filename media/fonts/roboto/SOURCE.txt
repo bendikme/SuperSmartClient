@@ -1,0 +1,8 @@
+Roboto, unmodified hinted static fonts
+Source: https://github.com/googlefonts/roboto-2
+Revision: 38062f4b4a0be4346d07a928408da21602545e9e
+
+56a45233d29f11b4dfb86d248e921939d115778f87325e7ae8cc108383d6664d  Roboto-Regular.ttf
+61f89f8db49261c2f6106e8dccc35df7b2f7ed909020db40a3fc905e95f99334  Roboto-Bold.ttf
+fa0b17bb4aaac4a1b2ee149dd4ca3b55e97d3077aa6ba9bb02541b316e7c46ce  Roboto-Italic.ttf
+40083ed54338397cf49d2c49f59eddcd963a30fdb301813d4bd3abbb37a13d12  Roboto-BoldItalic.ttf

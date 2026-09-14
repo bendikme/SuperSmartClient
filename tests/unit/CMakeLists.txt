@@ -50,6 +50,10 @@ target_link_libraries(emulatemb core ${Intl_LIBRARIES} GTest::gtest_main)
 gtest_discover_tests(emulatemb)
 
 if(BUILD_VIEWER)
+  add_executable(dashboardmodel dashboardmodel.cxx)
+  target_link_libraries(dashboardmodel dashboard_support GTest::gtest_main)
+  gtest_discover_tests(dashboardmodel)
+
   add_executable(unifiedpanel unifiedpanel.cxx
     ../../vncviewer/parameters.cxx
     ../../vncviewer/MonitorIndicesParameter.cxx)

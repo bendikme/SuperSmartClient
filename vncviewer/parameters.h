@@ -60,6 +60,8 @@ extern core::StringParameter geometry;
 extern core::BoolParameter remoteResize;
 
 extern core::BoolParameter listenMode;
+extern core::BoolParameter dashboardMode;
+extern core::StringParameter dashboardConfig;
 
 extern core::BoolParameter viewOnly;
 extern core::BoolParameter shared;

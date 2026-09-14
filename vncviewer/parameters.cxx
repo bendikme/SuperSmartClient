@@ -52,6 +52,9 @@
 
 static core::LogWriter vlog("Parameters");
 
+core::BoolParameter dashboardMode("Dashboard", "Open the panel dashboard when no server is specified", true);
+core::StringParameter dashboardConfig("DashboardConfig", "Path to a separate layout database", "");
+
 core::IntParameter
   pointerEventInterval("PointerEventInterval",
                        "Time in milliseconds to rate-limit successive "

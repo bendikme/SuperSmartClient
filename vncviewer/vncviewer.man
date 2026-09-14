@@ -361,6 +361,14 @@ host, the port number on the remote host, and the gateway machine
 respectively.
 .
 .TP
+.B \-Dashboard
+Open the SuperSmartClient panel dashboard when no server address is specified
+(default enabled). Use -Dashboard=0 for the legacy connection dialog.
+.TP
+.B \-DashboardConfig path
+Use a separate SQLite layout database. The dashboard supports named grids,
+saved passwords, automatic reconnect and database export/import. See README.md.
+.TP
 .B \-ViewOnly
 Specifies that no keyboard or mouse events should be sent to the server.
 Useful if you want to view a desktop without interfering; often needs to be

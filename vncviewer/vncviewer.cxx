@@ -329,6 +329,8 @@ static void init_fltk()
 {
   // Adjust look of FLTK
   init_theme();
+  extern void initAppFont();
+  initAppFont();
 
   // Proper Gnome Shell integration requires that we set a sensible
   // WM_CLASS for the window.
@@ -746,6 +748,11 @@ int main(int argc, char** argv)
   migrateDeprecatedOptions();
 
   create_base_dirs();
+
+  if (dashboardMode && !listenMode && !vncServerName[0]) {
+    extern int runDashboard(const char* configPath);
+    return runDashboard(dashboardConfig);
+  }
 
   network::Socket* sock = nullptr;
 

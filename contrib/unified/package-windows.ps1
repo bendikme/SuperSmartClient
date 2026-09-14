@@ -22,6 +22,7 @@ if (Test-Path -LiteralPath $package) {
 }
 New-Item -ItemType Directory -Path $package | Out-Null
 Copy-Item -LiteralPath $viewer -Destination (Join-Path $package 'SuperSmartClient.exe')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'media\fonts\roboto') -Destination (Join-Path $package 'fonts') -Recurse
 
 # Resolve transitive DLL imports. System DLLs are supplied by Windows.
 $pending = [System.Collections.Generic.Queue[string]]::new()
