@@ -4,6 +4,7 @@
 #include <config.h>
 #include <gtest/gtest.h>
 #include "DashboardModel.h"
+#include "DashboardImage.h"
 #include "DashboardStore.h"
 #include <cstdlib>
 #include <fstream>
@@ -186,6 +187,75 @@ TEST_F(DashboardModel, IndividualScaleUsesNativeOrSelectedSiemensResolution) {
     automatic.displayWidth = size.width; automatic.displayHeight = size.height; automatic.scale = 100;
     EXPECT_EQ(scaledDisplaySize(automatic), std::make_pair(size.width, size.height));
   }
+}
+TEST_F(DashboardModel, NativeImageIsPixelExactAfterChangingScale) {
+  ImageScaler scaler;
+  std::vector<uint8_t> source(17 * 13 * 3);
+  for (size_t index = 0; index < source.size(); ++index) source[index] = static_cast<uint8_t>(index * 97);
+  auto original = source;
+  scaler.scale(source, 17, 13, 11, 8);
+  EXPECT_EQ(scaler.scale(source, 17, 13, 17, 13), original);
+  EXPECT_EQ(source, original);
+  EXPECT_EQ(scaler.scale(source, 17, 13, 23, 18), ImageScaler().scale(source, 17, 13, 23, 18));
+  for (auto& byte : source) byte = 255 - byte;
+  EXPECT_EQ(scaler.scale(source, 17, 13, 23, 18), ImageScaler().scale(source, 17, 13, 23, 18));
+  EXPECT_EQ(scaler.scale(source, 13, 17, 23, 18), ImageScaler().scale(source, 13, 17, 23, 18));
+}
+TEST_F(DashboardModel, ImageScalingPreservesFlatColoursAndEdges) {
+  ImageScaler scaler;
+  std::vector<uint8_t> source(29 * 19 * 3);
+  for (size_t index = 0; index < source.size(); index += 3) {
+    source[index] = 17; source[index + 1] = 139; source[index + 2] = 241;
+  }
+  for (auto size : {std::make_pair(1, 1), std::make_pair(7, 5), std::make_pair(43, 31)}) {
+    const auto& pixels = scaler.scale(source, 29, 19, size.first, size.second);
+    ASSERT_EQ(pixels.size(), static_cast<size_t>(size.first) * size.second * 3);
+    for (size_t index = 0; index < pixels.size(); index += 3) {
+      ASSERT_EQ(pixels[index], 17); ASSERT_EQ(pixels[index + 1], 139); ASSERT_EQ(pixels[index + 2], 241);
+    }
+  }
+  EXPECT_EQ(scaler.scale({17, 139, 241}, 1, 1, 29, 19), source);
+  EXPECT_THROW(scaler.scale(source, 0, 19, 7, 5), std::invalid_argument);
+  EXPECT_THROW(scaler.scale(source, 29, 19, 0, 5), std::invalid_argument);
+  EXPECT_THROW(scaler.scale({1, 2}, 1, 1, 7, 5), std::invalid_argument);
+}
+TEST_F(DashboardModel, DownscalingSuppressesAliasingAtPanelSizes) {
+  ImageScaler scaler;
+  std::vector<uint8_t> source(1280 * 800 * 3);
+  for (int y = 0; y < 800; ++y) for (int x = 0; x < 1280; ++x)
+    for (int channel = 0; channel < 3; ++channel) source[(y * 1280 + x) * 3 + channel] = (x + y) % 2 ? 255 : 0;
+  for (int percent : {10, 25, 50, 75}) {
+    int width = 1280 * percent / 100, height = 800 * percent / 100;
+    const auto& pixels = scaler.scale(source, 1280, 800, width, height);
+    // Fine detail above the output's Nyquist limit must average to neutral grey,
+    // not disappear into black/white or produce a new checkerboard pattern.
+    for (int y = 4; y < height - 4; ++y) for (int x = 4; x < width - 4; ++x)
+      ASSERT_NEAR(pixels[(y * width + x) * 3], 127.5, 2);
+  }
+}
+TEST_F(DashboardModel, DownscalingRetainsThinStrokesBetweenSamplePositions) {
+  ImageScaler scaler;
+  for (int position = 20; position < 24; ++position) {
+    std::vector<uint8_t> source(80 * 32 * 3, 255);
+    for (int y = 0; y < 32; ++y) for (int channel = 0; channel < 3; ++channel)
+      source[(y * 80 + position) * 3 + channel] = 0;
+    const auto& pixels = scaler.scale(source, 80, 32, 20, 8);
+    int darkest = 255;
+    for (int x = 0; x < 20; ++x) darkest = std::min(darkest, static_cast<int>(pixels[(4 * 20 + x) * 3]));
+    EXPECT_LT(darkest, 220) << "Lost a one-pixel stroke at source column " << position;
+  }
+}
+TEST_F(DashboardModel, EnlargementInterpolatesColoursWithoutChangingChannels) {
+  ImageScaler scaler;
+  const auto& pixels = scaler.scale({255, 0, 0, 0, 0, 255}, 2, 1, 8, 4);
+  int blended = 0;
+  for (size_t index = 0; index < pixels.size(); index += 3) {
+    EXPECT_EQ(pixels[index + 1], 0);
+    EXPECT_NEAR(pixels[index] + pixels[index + 2], 255, 1);
+    blended += pixels[index] > 0 && pixels[index + 2] > 0;
+  }
+  EXPECT_GE(blended, 8);
+  EXPECT_EQ(pixels[0], 255); EXPECT_EQ(pixels[8 * 3 - 1], 255);
 }
 TEST_F(DashboardModel, DatabaseAndExportPreserveFreePlacementAndIndependentScaling) {
   auto library = newLibrary(); auto& workspace = library.layouts[0].workspace;

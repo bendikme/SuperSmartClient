@@ -3,7 +3,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 find_package(SQLite3 REQUIRED)
-add_library(dashboard_support STATIC DashboardModel.cxx DashboardSecrets.cxx DashboardStore.cxx)
+add_library(dashboard_support STATIC DashboardModel.cxx DashboardSecrets.cxx DashboardStore.cxx DashboardImage.cxx)
 target_compile_features(dashboard_support PUBLIC cxx_std_17)
 # The upstream project specifies -std=gnu++11 in CMAKE_CXX_FLAGS.
 target_compile_options(dashboard_support PUBLIC $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++17>)

@@ -126,6 +126,10 @@ HMI framebuffer remains unchanged, and control coordinates map back to its
 actual resolution. Pictures keep their aspect ratio if a selected screen
 preset differs from the connected panel.
 
+Scaled pictures use Lanczos filtering with an antialiasing footprint for
+reduction, preserving thin lines and avoiding jagged text. Every scale is
+rendered from the original framebuffer; 100% native size stays pixel-exact.
+
 ### Export and import
 
 **Layouts > Export database...** exports every named layout to a `.sscdb` file.

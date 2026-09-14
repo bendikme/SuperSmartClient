@@ -106,11 +106,11 @@ def saved_profiles(path):
 
 
 class Server:
-    def __init__(self, fixture, password="Test123!", standard=False, hold=False, reject=False, size=(320, 180)):
+    def __init__(self, fixture, password="Test123!", standard=False, hold=False, reject=False, size=(320, 180), detail=False):
         self.fixture, self.password, self.standard, self.hold, self.reject = fixture, password, standard, hold, reject
         self.connections, self.frames, self.authentications = 0, 0, 0
         self.inputs, self.errors = [], []
-        self.size = size
+        self.size, self.detail = size, detail
         self.stop, self.drop = threading.Event(), threading.Event()
         self.listener = socket.socket()
         self.listener.bind(("127.0.0.1", 0))
@@ -195,7 +195,40 @@ class Server:
                         rgb = (45, 161, 122) if x < 190 else (227, 235, 244)
                     else:
                         rgb = (244, 247, 250)
+                    if self.detail:
+                        rgb = (244, 247, 250) if y >= 28 else (35, 72, 111)
+                        if 32 <= x < 288 and 64 <= y < 192:
+                            value = 255 if (x + y) % 2 else 0
+                            rgb = (value, value, value)
+                        elif 320 <= x < 608 and 64 <= y < 192:
+                            value = 0 if x % 12 == 1 else 255
+                            rgb = (value, value, value)
                     pixels.extend((*rgb, 0))
+            if self.detail:
+                # Small bitmap numerals exercise thin text at several sizes.
+                glyphs = [
+                    ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+                    ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+                    ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+                    ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+                    ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+                    ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+                    ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+                    ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+                    ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+                    ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+                ]
+                for row, scale in enumerate((1, 2, 3, 4)):
+                    for digit, glyph in enumerate(glyphs):
+                        for gy, bits in enumerate(glyph):
+                            for gx, bit in enumerate(bits):
+                                if bit != "1": continue
+                                for dy in range(scale):
+                                    for dx in range(scale):
+                                        x, y = 40 + digit * 8 * scale + gx * scale + dx, 240 + row * 90 + gy * scale + dy
+                                        if x < width and y < height:
+                                            offset = (y * width + x) * 4
+                                            pixels[offset:offset + 4] = bytes((24, 39, 60, 0))
             while not self.stop.is_set():
                 if self.drop.is_set():
                     self.drop.clear()
@@ -542,6 +575,85 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(pixel(form, 40, 100), (30, 41, 59), "Text input has a light background")
             self.assertEqual(pixel(form, 100, 244), (30, 41, 59), "Dialog dropdown has a light background")
             self.click(editor, 75, 500)  # Cancel.
+
+    def assert_checkbox(self, picture, left, top, height, checked):
+        # The indicator has an 18-pixel square and a contrasting white tick.
+        x, y = left + 2, top + (height - 18) // 2
+        pixels = [self.pixel(picture, x + dx, y + dy) for dx in range(2, 16) for dy in range(2, 16)]
+        blue = sum(pixel == (37, 99, 235) for pixel in pixels)
+        white = sum(min(pixel) > 230 for pixel in pixels)
+        if checked:
+            self.assertGreater(blue, 95, "Checked box has no visible filled indicator")
+            self.assertGreater(white, 12, "Checked box has no visible white tick")
+        else:
+            self.assertEqual(blue, 0, "Unchecked box still appears checked")
+
+    def test_checkbox_states_are_visible_and_toggle_with_mouse_and_keyboard(self):
+        self.require_input()
+        create_database(self.db, [("Checkbox fixture", [])])
+        with self.viewer():
+            window = self.window()
+            for theme in ("light", "dark"):
+                if theme == "dark":
+                    self.click(window, 1298, 20)
+                    self.xdo("key", "Down", "Down", "Down", "Down", "Return")
+                self.click(window, 465, 20)
+                editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
+                                  "--name", "Add panel - SuperSmartClient").splitlines()[0]
+                self.xdo("windowfocus", "--sync", editor)
+                before = self.picture(editor, f".checkbox-{theme}.png")
+                self.assert_checkbox(before, 28, 352, 25, True)
+                self.assert_checkbox(before, 28, 383, 25, True)
+                self.assert_checkbox(before, 282, 383, 25, True)
+                self.assert_checkbox(before, 28, 414, 25, False)
+                self.click(editor, 130, 426)  # Clicking the label checks Monitor.
+                self.click(editor, 150, 364)  # Uncheck Remember.
+                changed = self.picture(editor, f".checkbox-{theme}-changed.png")
+                self.assert_checkbox(changed, 28, 414, 25, True)
+                self.assert_checkbox(changed, 28, 352, 25, False)
+                self.xdo("key", "space")  # Focused checkbox toggles with Space.
+                restored = self.picture(editor, f".checkbox-{theme}-keyboard.png")
+                self.assert_checkbox(restored, 28, 352, 25, True)
+                self.click(editor, 75, 500)
+
+    def test_filtered_scaling_preserves_fine_detail_and_native_pixels(self):
+        self.require_input()
+        server = self.server(size=(1280, 800), detail=True)
+        profile = panel_profile(server, "Resolution chart")
+        profile.update(displayWidth=1280, displayHeight=800, displayPreset=3, scale=50, fit=0,
+                       freePositioned=1, pixelX=0, pixelY=0, pixelWidth=642, pixelHeight=426)
+        create_database(self.db, [("Image quality", [profile])])
+        with self.viewer():
+            wait_for(lambda: server.frames > 2, "Resolution chart did not stream")
+            window = self.window()
+            self.choose_preset(window, 9)
+            current = 50
+            for percent in (50, 25, 100):
+                if percent != current:
+                    self.click(window, 4 + 1280 * current // 100 + 2 - 16, 56)
+                    self.xdo("key", *(7 * ["Down"]), "Return")
+                    dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
+                                      "--name", "Panel size and scale").splitlines()[0]
+                    self.xdo("windowfocus", "--sync", dialog)
+                    self.click(dialog, 65, 140)
+                    self.xdo("key", "ctrl+a")
+                    self.xdo("type", str(percent))
+                    self.click(dialog, 420, 288)
+                    current = percent
+                picture = self.picture(window, f".quality-{percent}.png")
+                if percent < 100:
+                    for y in range(96 * percent // 100, 160 * percent // 100):
+                        for x in range(96 * percent // 100, 224 * percent // 100):
+                            for channel in self.pixel(picture, 5 + x, 69 + y):
+                                self.assertAlmostEqual(channel, 127.5, delta=2,
+                                                       msg="Shrinking loses detail or produces aliasing")
+                else:
+                    for y in range(96, 112):
+                        for x in range(96, 112):
+                            expected = 255 if (x + y) % 2 else 0
+                            self.assertEqual(self.pixel(picture, 5 + x, 69 + y), (expected,) * 3,
+                                             "Native resolution was filtered or reused a scaled image")
+            self.assertEqual(server.inputs, [], "Local scaling controls reached the panel")
 
     def test_presets_reorder_into_fixed_slots_without_remote_input(self):
         self.require_input()

@@ -5,6 +5,7 @@
 #include "DashboardModel.h"
 #include "DashboardStore.h"
 #include "DashboardSession.h"
+#include "DashboardImage.h"
 #include "keysym2ucs.h"
 
 #include <algorithm>
@@ -123,6 +124,40 @@ private:
   Fl_Color background_ = palette(false).background;
 };
 
+class Checkbox : public Fl_Check_Button {
+public:
+  using Fl_Check_Button::Fl_Check_Button;
+  void theme(const Palette& colors) {
+    colors_ = colors; color(colors.background); labelcolor(colors.text); redraw();
+  }
+  void draw() override {
+    fl_color(color()); fl_rectf(x(), y(), w(), h());
+    const int left = x() + 2, top = y() + (h() - 18) / 2;
+    Fl_Color blue = fl_rgb_color(37, 99, 235);
+    Fl_Color fill = value() ? (active_r() ? blue : colors_.muted) : colors_.card;
+    if (Fl::focus() == this && active_r()) {
+      rounded(left - 2, top - 2, 22, 22, colors_.accent, 6);
+      rounded(left - 1, top - 1, 20, 20, color(), 5);
+    }
+    rounded(left, top, 18, 18, value() ? fill : hover_ ? colors_.accent : colors_.muted, 4);
+    rounded(left + 1, top + 1, 16, 16, fill, 3);
+    if (value()) {
+      fl_color(FL_WHITE);
+      fl_line_style(FL_SOLID | FL_CAP_ROUND | FL_JOIN_ROUND, 2);
+      fl_line(left + 4, top + 9, left + 7, top + 12, left + 14, top + 5);
+      fl_line_style(0);
+    }
+    draw_label(x() + 27, y(), w() - 27, h());
+  }
+  int handle(int event) override {
+    if (event == FL_ENTER || event == FL_LEAVE) { hover_ = event == FL_ENTER; redraw(); }
+    return Fl_Check_Button::handle(event);
+  }
+private:
+  Palette colors_ = palette(false);
+  bool hover_ = false;
+};
+
 class Choice : public Fl_Choice {
 public:
   using Fl_Choice::Fl_Choice;
@@ -153,6 +188,7 @@ void styleDialog(Fl_Group& dialog, const Palette& colors) {
   for (int i = 0; i < dialog.children(); ++i) {
     auto* widget = dialog.child(i); widget->labelcolor(colors.text);
     if (auto* button = dynamic_cast<Button*>(widget)) button->theme(colors, colors.background);
+    else if (auto* check = dynamic_cast<Checkbox*>(widget)) check->theme(colors);
     else if (auto* choice = dynamic_cast<Choice*>(widget)) choice->theme(colors, colors.background);
     else if (auto* input = dynamic_cast<Fl_Input_*>(widget)) {
       input->color(colors.card); input->textcolor(colors.text); input->cursor_color(colors.accent);
@@ -191,16 +227,16 @@ public:
       catch (const std::exception&) { password_->tooltip("Enter a replacement if the saved password is unavailable"); }
     }
     password_->value(result.password.c_str());
-    remember_ = new Fl_Check_Button(28, 352, 484, 25, "Remember password in my account");
+    remember_ = new Checkbox(28, 352, 484, 25, "Remember password in my account");
     remember_->value(panel.rememberPassword && passwordStorageAvailable());
     if (!passwordStorageAvailable()) {
       remember_->deactivate(); remember_->label("Password storage unavailable in this build");
     }
-    reconnect_ = new Fl_Check_Button(28, 383, 250, 25, "Reconnect automatically");
+    reconnect_ = new Checkbox(28, 383, 250, 25, "Reconnect automatically");
     reconnect_->value(panel.reconnect);
-    startup_ = new Fl_Check_Button(282, 383, 230, 25, "Connect on startup");
+    startup_ = new Checkbox(282, 383, 230, 25, "Connect on startup");
     startup_->value(panel.autoConnect);
-    monitor_ = new Fl_Check_Button(28, 414, 484, 25, "Monitor only (disable mouse and keyboard)");
+    monitor_ = new Checkbox(28, 414, 484, 25, "Monitor only (disable mouse and keyboard)");
     monitor_->value(panel.viewOnly);
     Fl_Widget* fields[] = {name_, address_, security_, password_, remember_, reconnect_, startup_, monitor_};
     for (auto* widget : fields) widget->labelsize(12);
@@ -246,7 +282,7 @@ class ExportDialog : public Fl_Double_Window {
 public:
   ExportDialog(const Palette& colors) : Fl_Double_Window(500, 274, "Export database - SuperSmartClient") {
     color(palette(false).background); begin();
-    include_ = new Fl_Check_Button(24, 23, 452, 30, "Include saved passwords");
+    include_ = new Checkbox(24, 23, 452, 30, "Include saved passwords");
 #ifdef HAVE_GNUTLS
     include_->value(1);
 #else
@@ -303,7 +339,7 @@ public:
     screen_->value(selected);
     scale_ = new Fl_Int_Input(24, 123, 110, 32, "Scale (%)");
     scale_->align(FL_ALIGN_TOP_LEFT); scale_->value(std::to_string(panel.scale).c_str());
-    fit_ = new Fl_Check_Button(153, 123, 323, 32, "Fit picture to the window"); fit_->value(panel.fit);
+    fit_ = new Checkbox(153, 123, 323, 32, "Fit picture to the window"); fit_->value(panel.fit);
     preview_ = new Fl_Box(24, 171, 452, 32); preview_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
     auto* note = new Fl_Box(24, 206, 452, 44, "Fixed sizes use free placement. Choose an arrangement to return to a grid.\nThe panel's own resolution is unchanged.");
     note->labelsize(11); note->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
@@ -375,6 +411,7 @@ private:
   void sendPointer(unsigned mask);
   unsigned mouseMask() const;
   Dashboard& owner_;
+  ImageScaler scaler_;
   std::unique_ptr<Fl_Image> image_;
   unsigned generation_ = ~0u;
   int imageWidth_ = 0, imageHeight_ = 0;
@@ -1011,8 +1048,9 @@ void Tile::draw() {
   if (session.live() && !session.pixels().empty()) {
     int left, top, width, height; imageRect(left, top, width, height);
     if (!image_ || generation_ != session.generation() || imageWidth_ != width || imageHeight_ != height) {
-      Fl_RGB_Image original(session.pixels().data(), session.width(), session.height(), 3);
-      image_.reset(original.copy(width, height));
+      image_.reset();
+      const auto& pixels = scaler_.scale(session.pixels(), session.width(), session.height(), width, height);
+      image_.reset(new Fl_RGB_Image(pixels.data(), width, height, 3));
       generation_ = session.generation(); imageWidth_ = width; imageHeight_ = height;
     }
     image_->draw(left, top);
