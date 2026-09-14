@@ -45,6 +45,7 @@ Palette palette(bool dark)
 }
 void rounded(int x, int y, int w, int h, Fl_Color color, int radius = 8)
 {
+  color = Fl::get_color(color);
   radius = std::min(radius, std::min(w, h) / 2);
   if (radius < 1) { fl_color(color); fl_rectf(x, y, w, h); return; }
   fl_color(color);
@@ -88,6 +89,12 @@ bool hitRect(int x, int y, int w, int h)
          Fl::event_y() >= y && Fl::event_y() < y + h;
 }
 
+void dialogButtonBox(int x, int y, int w, int h, Fl_Color color) {
+  fl_color(FL_BACKGROUND_COLOR); fl_rectf(x, y, w, h);
+  rounded(x, y, w, h, fl_color_average(FL_FOREGROUND_COLOR, color, 0.2f), 8);
+  rounded(x + 1, y + 1, w - 2, h - 2, color, 7);
+}
+
 class Button : public Fl_Button {
 public:
   Button(int x, int y, int w, int h, const char* text, bool primary = false)
@@ -120,7 +127,8 @@ public:
   void theme(const Palette& colors, Fl_Color background) {
     colors_ = colors; background_ = background;
     color(colors.card); textcolor(colors.text); labelcolor(colors.text);
-    selection_color(fl_rgb_color(37, 99, 235)); textsize(12); box(FL_FLAT_BOX); down_box(FL_FLAT_BOX);
+    // FLTK changes FL_FLAT_BOX to its light, beveled FL_UP_BOX for popups.
+    selection_color(fl_rgb_color(37, 99, 235)); textsize(12); box(FL_BORDER_BOX); down_box(FL_FLAT_BOX);
     redraw();
   }
   void draw() override {
@@ -752,6 +760,10 @@ private:
     Fl::set_color(FL_BACKGROUND_COLOR, p.background); Fl::set_color(FL_BACKGROUND2_COLOR, p.card);
     Fl::set_color(FL_FOREGROUND_COLOR, p.text); Fl::set_color(FL_INACTIVE_COLOR, p.muted);
     Fl::set_color(FL_SELECTION_COLOR, fl_rgb_color(37, 99, 235));
+    Fl::set_color(FL_LIGHT3, p.border); Fl::set_color(FL_DARK3, p.border);
+    // FLTK's shared name/password/certificate dialogs use the standard boxes.
+    Fl::set_boxtype(FL_UP_BOX, dialogButtonBox, 2, 2, 4, 4);
+    Fl::set_boxtype(FL_DOWN_BOX, dialogButtonBox, 2, 2, 4, 4);
     for (auto* button : {add_, connect_, disconnect_, libraryMenu_}) button->theme(p, fl_rgb_color(19, 33, 53));
     for (auto* button : {back_, theme_}) button->theme(p, p.background);
     theme_->label(workspace_.dark ? "Light theme" : "Dark theme");

@@ -576,9 +576,10 @@ class DashboardTests(unittest.TestCase):
                 time.sleep(0.2)
                 capture_window(window, str(SCREENSHOT) + ".scaled.png")
             self.assertEqual(first.inputs + second.inputs, [], "Local size or move controls reached a panel")
-        before = first.authentications
+        before, frames_before = first.authentications, first.frames
         with self.viewer():
-            wait_for(lambda: first.authentications > before and first.frames > 4, "Scaled layout did not reconnect")
+            wait_for(lambda: first.authentications > before and first.frames > frames_before + 2,
+                     "Scaled layout did not reconnect and display new frames")
             window = self.window()
             # Coordinates map from the 640 x 400 picture to the fixture's 320 x 200 framebuffer.
             self.click(window, 360, 385)
