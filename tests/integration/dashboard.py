@@ -606,6 +606,7 @@ class DashboardTests(unittest.TestCase):
                               "--name", "SuperSmartClient updates").splitlines()[0]
             picture = self.picture(dialog, ".updates.png")
             self.assertEqual(self.pixel(picture, 10, 10), (17, 24, 39))
+            self.assertEqual(self.pixel(picture, 310, 221), (39, 56, 78), "Disabled download looks active")
             self.assertEqual(self.geometry(dialog)["WIDTH"], 560)
             self.click(dialog, 483, 268)
             self.assertIsNone(self.process.poll())

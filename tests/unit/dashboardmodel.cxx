@@ -400,8 +400,9 @@ TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPr
   std::filesystem::create_directory(app);
   std::ofstream(app / "manifest.json") << "{}";
   std::ofstream(app / "update.ps1") <<
-    "param($Action, $AppDirectory, $WorkDirectory, $InstalledVersion)\n"
-    "$state = if ($Action -eq 'Download') { 'ready' } else { 'available' }\n"
+    "param($Action, $AppDirectory, $WorkDirectory, $InstalledVersion, $ParentId, $ConfigPath, $RestartArguments)\n"
+    "$state = if ($Action -eq 'Install') { 'installed' } elseif ($Action -eq 'Download') { 'ready' } else { 'available' }\n"
+    "if ($Action -eq 'Install') { [IO.File]::WriteAllText((Join-Path $WorkDirectory 'restart-fixture.txt'), [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($RestartArguments)), [Text.UTF8Encoding]::new($false)); [IO.File]::WriteAllText((Join-Path $WorkDirectory 'config-fixture.txt'), $ConfigPath, [Text.UTF8Encoding]::new($false)) }\n"
     "[IO.File]::WriteAllText((Join-Path $WorkDirectory 'status.txt'), ($state + \"`n1.2.0`nFixture update`n\"), [Text.UTF8Encoding]::new($false))\n";
   AppUpdate updater(directory / "test layouts.db", true, app);
   ASSERT_TRUE(updater.supported());
@@ -423,6 +424,10 @@ TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPr
   AppUpdate restored(directory / "test layouts.db", true, app);
   EXPECT_FALSE(restored.automatic());
   EXPECT_EQ(restored.state(), AppUpdate::State::Ready);
+  ASSERT_TRUE(updater.install()); finish();
+  EXPECT_EQ(updater.state(), AppUpdate::State::Current) << updater.message();
+  EXPECT_TRUE(std::filesystem::exists(directory / ".supersmart-updates/restart-fixture.txt"));
+  EXPECT_EQ(contents(directory / ".supersmart-updates/config-fixture.txt"), (directory / "test layouts.db").u8string());
 }
 #endif
 TEST_F(DashboardModel, DuplicateResealsSavedPasswordsForNewIdentifiers) {

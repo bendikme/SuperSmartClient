@@ -320,10 +320,7 @@ try {
         throw 'The update cache must be separate from the application directory.'
     }
     $null = [IO.Directory]::CreateDirectory($script:WorkRoot)
-    $updateLock = [IO.File]::Open((Get-ChildPath $script:WorkRoot 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-    if ($Action -eq 'Check') { Find-Update }
-    elseif ($Action -eq 'Download') { Save-Update }
-    else {
+    if ($Action -eq 'Install') {
         if ($ParentId -gt 0) {
             $parent = Get-Process -Id $ParentId -ErrorAction SilentlyContinue
             if ($parent) {
@@ -331,9 +328,14 @@ try {
                 if (!$parent.WaitForExit(120000)) { throw 'The application did not close. The update was not installed.' }
             }
         }
+        # Restore the requested app window even if another update helper owns
+        # the cache lock. Never terminate a process to acquire that lock.
         $restart = !$NoRestart
-        Install-Update
     }
+    $updateLock = [IO.File]::Open((Get-ChildPath $script:WorkRoot 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+    if ($Action -eq 'Check') { Find-Update }
+    elseif ($Action -eq 'Download') { Save-Update }
+    else { Install-Update }
 } catch {
     $exitCode = 1
     $message = $_.Exception.Message

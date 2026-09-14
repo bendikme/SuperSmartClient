@@ -109,9 +109,10 @@ public:
   void draw() override {
     fl_color(background_); fl_rectf(x(), y(), w(), h());
     Fl_Color fill = primary_ ? fl_rgb_color(37, 99, 235) : colors_.card;
-    if (value()) fill = fl_color_average(fill, colors_.text, 0.85f);
+    if (!active_r()) fill = colors_.soft;
+    else if (value()) fill = fl_color_average(fill, colors_.text, 0.85f);
     else if (hover_) fill = fl_color_average(fill, primary_ ? FL_WHITE : colors_.accent, 0.92f);
-    rounded(x(), y(), w(), h(), Fl::focus() == this ? colors_.accent : primary_ ? fill : colors_.border, 9);
+    rounded(x(), y(), w(), h(), active_r() && Fl::focus() == this ? colors_.accent : primary_ && active_r() ? fill : colors_.border, 9);
     rounded(x() + 1, y() + 1, w() - 2, h() - 2, fill, 8);
     caption(label(), x() + 6, y(), w() - 12, h(), !active_r() ? colors_.muted : primary_ ? FL_WHITE : colors_.text,
       13, primary_, FL_ALIGN_CENTER);
