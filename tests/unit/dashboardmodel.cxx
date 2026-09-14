@@ -396,6 +396,7 @@ TEST_F(DashboardModel, UpdateVersionsCompareNumericallyAndRejectInvalidReleases)
 }
 #ifdef _WIN32
 TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPreference) {
+  const std::string candidate = std::to_string(std::stoi(SUPERSMART_VERSION) + 1) + ".0.0";
   auto app = directory / std::filesystem::u8path("portable app \xc3\xb8 & (test)");
   std::filesystem::create_directory(app);
   std::ofstream(app / "manifest.json") << "{}";
@@ -403,7 +404,8 @@ TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPr
     "param($Action, $AppDirectory, $WorkDirectory, $InstalledVersion, $ParentId, $ConfigPath, $RestartArguments)\n"
     "$state = if ($Action -eq 'Install') { 'installed' } elseif ($Action -eq 'Download') { 'ready' } else { 'available' }\n"
     "if ($Action -eq 'Install') { [IO.File]::WriteAllText((Join-Path $WorkDirectory 'restart-fixture.txt'), [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($RestartArguments)), [Text.UTF8Encoding]::new($false)); [IO.File]::WriteAllText((Join-Path $WorkDirectory 'config-fixture.txt'), $ConfigPath, [Text.UTF8Encoding]::new($false)) }\n"
-    "[IO.File]::WriteAllText((Join-Path $WorkDirectory 'status.txt'), ($state + \"`n1.2.0`nFixture update`n\"), [Text.UTF8Encoding]::new($false))\n";
+    "[IO.File]::WriteAllText((Join-Path $WorkDirectory 'status.txt'), ($state + \"`n" << candidate <<
+    "`nFixture update`n\"), [Text.UTF8Encoding]::new($false))\n";
   AppUpdate updater(directory / "test layouts.db", true, app);
   ASSERT_TRUE(updater.supported());
   updater.automatic(false);
@@ -418,7 +420,7 @@ TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPr
   };
   finish();
   ASSERT_EQ(updater.state(), AppUpdate::State::Available) << updater.message();
-  EXPECT_EQ(updater.version(), "1.2.0");
+  EXPECT_EQ(updater.version(), candidate);
   updater.download(); finish();
   ASSERT_EQ(updater.state(), AppUpdate::State::Ready) << updater.message();
   AppUpdate restored(directory / "test layouts.db", true, app);
