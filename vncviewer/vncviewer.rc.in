@@ -25,8 +25,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_UK
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION @RCVERSION@
- PRODUCTVERSION @RCVERSION@
+ FILEVERSION @SUPERSMART_RCVERSION@
+ PRODUCTVERSION @SUPERSMART_RCVERSION@
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -42,16 +42,16 @@ BEGIN
         BLOCK "080904b0"
         BEGIN
             VALUE "Comments", "\0"
-            VALUE "CompanyName", "TigerVNC team\0"
-            VALUE "FileDescription", "TigerVNC\0"
-            VALUE "ProductName", "TigerVNC\0"
-            VALUE "FileVersion", "@RCVERSION@\0"
+            VALUE "CompanyName", "SuperSmartClient contributors\0"
+            VALUE "FileDescription", "SuperSmartClient panel workspace\0"
+            VALUE "ProductName", "SuperSmartClient\0"
+            VALUE "FileVersion", "@SUPERSMART_VERSION@\0"
             VALUE "InternalName", "vncviewer\0"
             VALUE "LegalCopyright", "Copyright (C) 1999-2026 TigerVNC team and many others (see README.rst)\0"
             VALUE "LegalTrademarks", "TigerVNC\0"
-            VALUE "OriginalFilename", "vncviewer.exe\0"
+            VALUE "OriginalFilename", "SuperSmartClient.exe\0"
             VALUE "PrivateBuild", "\0"
-            VALUE "ProductVersion", "@VERSION@\0"
+            VALUE "ProductVersion", "@SUPERSMART_VERSION@\0"
             VALUE "SpecialBuild", "\0"
         END
     END

@@ -6,6 +6,8 @@
 #include "DashboardStore.h"
 #include "DashboardSession.h"
 #include "DashboardImage.h"
+#include "AppUpdate.h"
+#include "parameters.h"
 #include "keysym2ucs.h"
 
 #include <algorithm>
@@ -29,6 +31,7 @@
 #include <FL/Fl_Scroll.H>
 #include <FL/fl_ask.H>
 #include <FL/fl_draw.H>
+#include <FL/filename.H>
 
 namespace dashboard {
 namespace {
@@ -110,7 +113,7 @@ public:
     else if (hover_) fill = fl_color_average(fill, primary_ ? FL_WHITE : colors_.accent, 0.92f);
     rounded(x(), y(), w(), h(), Fl::focus() == this ? colors_.accent : primary_ ? fill : colors_.border, 9);
     rounded(x() + 1, y() + 1, w() - 2, h() - 2, fill, 8);
-    caption(label(), x() + 6, y(), w() - 12, h(), primary_ ? FL_WHITE : colors_.text,
+    caption(label(), x() + 6, y(), w() - 12, h(), !active_r() ? colors_.muted : primary_ ? FL_WHITE : colors_.text,
       13, primary_, FL_ALIGN_CENTER);
   }
   int handle(int event) override {
@@ -394,6 +397,63 @@ private:
   bool accepted = false;
 };
 
+class UpdateDialog : public Fl_Double_Window {
+public:
+  UpdateDialog(AppUpdate& updater, const Palette& colors)
+    : Fl_Double_Window(560, 302, "SuperSmartClient updates"), updater_(updater)
+  {
+    begin();
+    auto* heading = new Fl_Box(24, 18, 512, 34, "SuperSmartClient " SUPERSMART_VERSION);
+    heading->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE); heading->labelfont(FL_HELVETICA_BOLD); heading->labelsize(22);
+    status_ = new Fl_Box(24, 62, 512, 95);
+    status_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP); status_->labelsize(14);
+    automatic_ = new Checkbox(24, 168, 512, 26, "Check for updates automatically (once a day)");
+    automatic_->value(updater_.automatic());
+    if (!updater_.supported()) automatic_->deactivate();
+    automatic_->callback([](Fl_Widget*, void* data) {
+      auto& dialog = *static_cast<UpdateDialog*>(data);
+      try { dialog.updater_.automatic(dialog.automatic_->value()); }
+      catch (const std::exception& error) { fl_alert("%s", error.what()); dialog.automatic_->value(dialog.updater_.automatic()); }
+    }, this);
+    auto* releases = new Button(24, 211, 100, 32, "Releases");
+    releases->callback([](Fl_Widget*, void*) {
+      char error[256];
+      if (!fl_open_uri("https://github.com/bendikme/SuperSmartClient/releases", error, sizeof(error))) fl_alert("%s", error);
+    });
+    check_ = new Button(132, 211, 120, 32, "Check now");
+    check_->callback([](Fl_Widget*, void* data) { static_cast<UpdateDialog*>(data)->updater_.check(); }, this);
+    action_ = new Button(300, 211, 236, 32, "Download update", true);
+    action_->callback([](Fl_Widget*, void* data) {
+      auto& dialog = *static_cast<UpdateDialog*>(data);
+      if (dialog.updater_.state() == AppUpdate::State::Ready) { dialog.install_ = true; dialog.hide(); }
+      else dialog.updater_.download();
+    }, this);
+    auto* close = new Button(436, 254, 100, 30, "Close");
+    close->callback([](Fl_Widget*, void* data) { static_cast<UpdateDialog*>(data)->hide(); }, this);
+    callback([](Fl_Widget* widget, void*) { widget->hide(); });
+    end(); styleDialog(*this, colors); set_modal(); refresh();
+  }
+  bool run() {
+    show();
+    while (shown()) { Fl::wait(0.1); updater_.poll(); refresh(); }
+    return install_;
+  }
+private:
+  void refresh() {
+    if (previous_ == updater_.state()) return;
+    previous_ = updater_.state(); status_->copy_label(updater_.message().c_str());
+    if (updater_.supported() && !updater_.busy()) check_->activate(); else check_->deactivate();
+    if (updater_.available()) action_->activate(); else action_->deactivate();
+    action_->copy_label(updater_.state() == AppUpdate::State::Ready ? "Install and restart" : "Download update");
+  }
+  AppUpdate& updater_;
+  AppUpdate::State previous_ = AppUpdate::State::Installing;
+  Fl_Box* status_;
+  Checkbox* automatic_;
+  Button *check_, *action_;
+  bool install_ = false;
+};
+
 class Dashboard;
 class Tile : public Fl_Widget {
 public:
@@ -443,7 +503,8 @@ public:
   Dashboard(Library library, std::filesystem::path path)
     : Fl_Double_Window(library.layouts[activeLayout(library)].workspace.width,
                        library.layouts[activeLayout(library)].workspace.height, "SuperSmartClient - Panel workspace"),
-      library_(std::move(library)), workspace_(library_.layouts[activeLayout(library_)].workspace), path_(std::move(path))
+      library_(std::move(library)), workspace_(library_.layouts[activeLayout(library_)].workspace), path_(std::move(path)),
+      updater_(path_, checkUpdates)
   {
     size_range(860, 600);
     begin();
@@ -492,8 +553,9 @@ public:
     windowed_ = {x(), y(), w(), h()};
     updateLayouts(); applyTheme(); arrange();
     Fl::add_timeout(0.05, tick, this);
+    Fl::add_timeout(1.0, updateTick, this);
   }
-  ~Dashboard() override { Fl::remove_timeout(tick, this); }
+  ~Dashboard() override { Fl::remove_timeout(tick, this); Fl::remove_timeout(updateTick, this); }
   void start() { for (auto* tile : tiles_) if (tile->panel.autoConnect) tile->session.start(); }
   Palette colors() const { return palette(workspace_.dark); }
   bool focused(const Tile* tile) const { return focused_ == tile; }
@@ -661,6 +723,14 @@ public:
     if (presentation_) exitFull_->draw();
   }
 private:
+  static void updateTick(void* data) {
+    auto& app = *static_cast<Dashboard*>(data);
+    Fl::repeat_timeout(1.0, updateTick, data);
+    app.updater_.poll();
+    bool available = app.updater_.available();
+    app.actions_->copy_label(available ? "!" : "...");
+    app.actions_->tooltip(available ? "An update is available. Open Updates to download and install." : "Workspace actions, appearance and updates");
+  }
   static void tick(void* data) {
     auto& app = *static_cast<Dashboard*>(data);
     // Schedule before processing so other sessions keep updating in certificate dialogs.
@@ -824,7 +894,8 @@ private:
       {"Custom grid: 1 column", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {"Custom grid: 2 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {"Custom grid: 3 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
-      {"Custom grid: 4 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Custom grid: 4 columns", 0, nullptr, nullptr, FL_MENU_DIVIDER, 0, 0, 0, 0},
+      {updater_.available() ? "Update available..." : "Updates...", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {nullptr, 0, nullptr, nullptr, 0, 0, 0, 0, 0}
     };
     const auto* choice = items->pulldown(actions_->x(), actions_->y(), actions_->w(), actions_->h(), nullptr, layouts_);
@@ -833,7 +904,14 @@ private:
     if (action <= 1) for (auto* tile : tiles_) { if (action == 0) tile->session.start(); else tile->session.stop(); }
     else if (action == 2) resetDividers();
     else if (action == 3) { workspace_.dark = !workspace_.dark; applyTheme(); save(); }
-    else {
+    else if (action == 8) {
+      UpdateDialog dialog(updater_, colors());
+      if (dialog.run() && save()) {
+        if (!updater_.install()) { fl_alert("%s", updater_.message().c_str()); return; }
+        for (auto* tile : tiles_) tile->session.stop();
+        hide();
+      }
+    } else {
       workspace_.columns = action - 3;
       for (auto* tile : tiles_) tile->panel.columns = tile->panel.rows = 1;
       choosePreset(Preset::CustomGrid);
@@ -952,6 +1030,7 @@ private:
   Library library_;
   Workspace workspace_;
   std::filesystem::path path_;
+  AppUpdate updater_;
   std::vector<Tile*> tiles_;
   Tile *focused_ = nullptr, *selected_ = nullptr;
   Fl_Scroll* scroll_ = nullptr;

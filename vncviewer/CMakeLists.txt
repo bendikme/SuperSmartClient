@@ -3,7 +3,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 find_package(SQLite3 REQUIRED)
-add_library(dashboard_support STATIC DashboardModel.cxx DashboardSecrets.cxx DashboardStore.cxx DashboardImage.cxx)
+add_library(dashboard_support STATIC DashboardModel.cxx DashboardSecrets.cxx DashboardStore.cxx DashboardImage.cxx AppUpdate.cxx)
 target_compile_features(dashboard_support PUBLIC cxx_std_17)
 # The upstream project specifies -std=gnu++11 in CMAKE_CXX_FLAGS.
 target_compile_options(dashboard_support PUBLIC $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++17>)
@@ -55,7 +55,9 @@ add_executable(vncviewer
 
 add_custom_command(TARGET vncviewer POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/media/fonts/roboto $<TARGET_FILE_DIR:vncviewer>/fonts)
+    ${CMAKE_SOURCE_DIR}/media/fonts/roboto $<TARGET_FILE_DIR:vncviewer>/fonts
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_SOURCE_DIR}/VERSION.txt $<TARGET_FILE_DIR:vncviewer>/VERSION.txt)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/media/fonts/roboto/
   DESTINATION ${CMAKE_INSTALL_FULL_DATADIR}/supersmartclient/fonts)
 

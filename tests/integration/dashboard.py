@@ -293,7 +293,7 @@ class DashboardTests(unittest.TestCase):
             startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startup.wShowWindow = subprocess.SW_HIDE
         with tempfile.TemporaryFile() as log:
-            process = subprocess.Popen([VIEWER, "-DashboardConfig", str(self.db), "-X509CA", str(self.cert)],
+            process = subprocess.Popen([VIEWER, "-DashboardConfig", str(self.db), "-CheckUpdates=0", "-X509CA", str(self.cert)],
                                        env=env, stdout=log, stderr=log, startupinfo=startup)
             self.process = process
             try:
@@ -592,6 +592,23 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(pixel(form, 40, 100), (30, 41, 59), "Text input has a light background")
             self.assertEqual(pixel(form, 100, 244), (30, 41, 59), "Dialog dropdown has a light background")
             self.click(editor, 75, 500)  # Cancel.
+
+    def test_update_dialog_is_local_and_uses_the_current_theme(self):
+        self.require_input()
+        create_database(self.db, [("Updates fixture", [])])
+        with self.viewer():
+            window = self.window()
+            self.click(window, 1298, 20)
+            self.xdo("key", "Down", "Down", "Down", "Down", "Return")
+            self.click(window, 1298, 20)
+            self.xdo("key", *(["Down"] * 9), "Return")
+            dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
+                              "--name", "SuperSmartClient updates").splitlines()[0]
+            picture = self.picture(dialog, ".updates.png")
+            self.assertEqual(self.pixel(picture, 10, 10), (17, 24, 39))
+            self.assertEqual(self.geometry(dialog)["WIDTH"], 560)
+            self.click(dialog, 483, 268)
+            self.assertIsNone(self.process.poll())
 
     def assert_checkbox(self, picture, left, top, height, checked):
         # The indicator has an 18-pixel square and a contrasting white tick.

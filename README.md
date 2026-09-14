@@ -18,6 +18,11 @@ headers, so the native Windows viewer builds with the current MSYS2 toolchain.
 
 ## Connect to a panel
 
+Download the [latest Windows release](https://github.com/bendikme/SuperSmartClient/releases/latest),
+extract the entire ZIP and open `SuperSmartClient.exe`. Windows 10/11 x64 and
+Windows PowerShell 5.1 are required. Keep the DLLs, fonts, `manifest.json` and
+`update.ps1` beside the executable.
+
 1. On the panel, open **Control Panel > Network and Internet > Remote connection**.
    Configure the two different SmartServer passwords and enable **Smart Server**.
    The V20 manual specifies exactly eight characters per password, including
@@ -241,6 +246,36 @@ If negotiation fails, check that SmartServer is enabled, the address/port are
 correct and its encryption setting matches the selected TLS mode. Do not use
 the HTTPS port 443 as the VNC port. If authentication fails, use one of the two
 SmartServer passwords. Monitor-only access can also be imposed by the panel.
+
+## Releases and updates
+
+Windows portable releases check GitHub automatically at most once a day. The
+workspace's **...** button shows **!** when an update is available. Open
+**... > Updates...**, choose **Download update**, and choose **Install and
+restart** when convenient. Downloading keeps panels connected. Installation
+saves the layout, closes the app, updates its managed files and restarts it with
+the same startup options. Automatic checking can be turned off in that dialog;
+**Check now** remains available. `-CheckUpdates=0` disables automatic checks for
+isolated tests or deployments that manage updates themselves.
+
+Updates use HTTPS and verify GitHub's SHA-256 digest, the archive's file list,
+and each file's checksum. A failed file replacement restores the previous
+application files. Layout databases, protected passwords, exports and personal
+files are preserved. The update cache and last application backup are kept in
+`.supersmart-updates` beside the layout database. There is no telemetry, and
+update requests contain no panel addresses or credentials.
+
+Keep the app in a folder your Windows account can write to. Close other copies
+using that same application folder before installing. The application is not
+code-signed, so Windows may show its usual warning for downloaded software.
+Linux builds can open the release page; installation through this dialog is
+available for the Windows portable release.
+
+Release versions live in `VERSION.txt`, independently of the upstream TigerVNC
+version. Tags use `ssc-vMAJOR.MINOR.PATCH` to avoid the inherited TigerVNC tags.
+The [release workflow](.github/workflows/unified-panels.yml) publishes the ZIP
+and checksum only after the Windows and Linux checks succeed. See
+[the release instructions](contrib/unified/BUILDING.md#publishing-a-release).
 
 ## Build and test
 

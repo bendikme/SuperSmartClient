@@ -54,6 +54,7 @@ static core::LogWriter vlog("Parameters");
 
 core::BoolParameter dashboardMode("Dashboard", "Open the panel dashboard when no server is specified", true);
 core::StringParameter dashboardConfig("DashboardConfig", "Path to a separate layout database", "");
+core::BoolParameter checkUpdates("CheckUpdates", "Allow automatic GitHub release checks", true);
 
 core::IntParameter
   pointerEventInterval("PointerEventInterval",

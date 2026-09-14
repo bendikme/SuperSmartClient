@@ -3,6 +3,7 @@ name: Unified panels
 on:
   push:
     branches: [unified-panels]
+    tags: ['ssc-v*']
   pull_request:
   workflow_dispatch:
 
@@ -83,6 +84,7 @@ jobs:
         env:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
+          ./tests/integration/updater.ps1
           ./contrib/unified/package-windows.ps1 -BuildDir build `
             -RuntimeBin (Join-Path $env:MSYS2_LOCATION 'mingw64/bin')
       - uses: actions/upload-artifact@v4
@@ -91,3 +93,47 @@ jobs:
           path: |
             dist/workspaces/*.zip
             dist/workspaces/*.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/ssc-v')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency: supersmart-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SuperSmartClient-windows-x64
+          path: build/release
+      - name: Verify version and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          version = Path('VERSION.txt').read_text().strip()
+          if os.environ['RELEASE_TAG'] != 'ssc-v' + version:
+              raise SystemExit('The release tag must match VERSION.txt')
+          archive = Path('build/release/SuperSmartClient-windows-x64.zip')
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          if digest != Path(str(archive)+'.sha256').read_text().split()[0]:
+              raise SystemExit('Package checksum mismatch')
+          with zipfile.ZipFile(archive) as z:
+              manifest = json.loads(z.read('SuperSmartClient-windows-x64/manifest.json'))
+              if manifest['version'] != version:
+                  raise SystemExit('Packaged version does not match the release tag')
+              for entry in manifest['files']:
+                  data = z.read('SuperSmartClient-windows-x64/' + entry['path'])
+                  if len(data) != entry['size'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
+                      raise SystemExit('Packaged file failed verification: ' + entry['path'])
+          PY
+          version=$(cat VERSION.txt)
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "SuperSmartClient $version" \
+            --notes-file contrib/unified/RELEASE_NOTES.md \
+            build/release/SuperSmartClient-windows-x64.zip \
+            build/release/SuperSmartClient-windows-x64.zip.sha256
+          gh release edit "$RELEASE_TAG" --draft=false --latest

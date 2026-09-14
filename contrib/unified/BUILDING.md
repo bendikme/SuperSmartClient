@@ -35,6 +35,7 @@ from PowerShell:
 ```powershell
 python tests/integration/unified_panel.py --viewer build/vncviewer/vncviewer.exe
 python tests/integration/dashboard.py --viewer build/vncviewer/vncviewer.exe
+.\tests\integration\updater.ps1
 ```
 
 In PowerShell, from the repository root, create a portable ZIP:
@@ -54,6 +55,9 @@ notices. It creates `dist/workspaces/SuperSmartClient-windows-x64.zip`, its
 SHA-256 checksum, and the extracted package beside it. For a repeat package,
 close the packaged app and add `-Replace` to the same command. Do not create a
 fresh output directory for each change. The program is not code-signed.
+The package also includes `VERSION.txt`, the local update helper, and a manifest
+with the SHA-256 and size of every managed file. Packaging refuses an executable
+whose embedded version differs from `VERSION.txt`; rebuild after changing it.
 
 If the app is running, use `-ZipOnly -Replace`. This stages files under
 `build/package/` and refreshes the same ZIP without replacing the running
@@ -108,3 +112,37 @@ To run the complete upstream unit suite, build all the test targets first:
 cmake --build build --parallel
 ctest --test-dir build/tests/unit --output-on-failure
 ```
+
+## Publishing a release
+
+1. Set the new **SuperSmartClient** version in `VERSION.txt` and write the release
+   notes in `contrib/unified/RELEASE_NOTES.md`. Keep the upstream `VERSION` in
+   `CMakeLists.txt` at the TigerVNC base version.
+2. Commit and push the changes to `unified-panels`. Check the Windows and Linux
+   workflow results. The Windows job includes offline updater tests for checksum
+   failures, unsafe archives, replacement, rollback and preservation of user data.
+3. Tag that commit with the matching `ssc-v` version and push the tag:
+
+   ```sh
+   git tag -a ssc-v1.0.1 -m "SuperSmartClient 1.0.1"
+   git push origin ssc-v1.0.1
+   ```
+
+The tag workflow runs both platforms, verifies the packaged version and all file
+hashes, uploads the Windows ZIP and checksum to a draft release, then publishes
+it as the latest stable release. Only that final job has `contents: write`.
+Failed checks leave the release unpublished. Published releases are never
+overwritten by this workflow; corrections get a new patch version.
+
+The updater uses GitHub's public stable-release API without a token. It checks
+at most daily, offers downloads, and installs only on the user's request. Its
+local PowerShell helper waits for the app to exit without terminating it, checks
+for other running copies, verifies the downloaded archive again, and replaces
+only paths listed in the package manifest. It keeps one backup outside the
+application directory and restores it if a replacement fails. The database,
+credential store and startup options survive installation.
+
+The first release must be extracted manually over older, unversioned packages
+after closing them. Subsequent releases can use the in-app updater. Signing the
+Windows executable requires a separate code-signing certificate; no signing
+key or GitHub credential is included in the app.

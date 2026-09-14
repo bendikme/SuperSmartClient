@@ -5,10 +5,12 @@
 #include <gtest/gtest.h>
 #include "DashboardModel.h"
 #include "DashboardImage.h"
+#include "AppUpdate.h"
 #include "DashboardStore.h"
 #include <cstdlib>
 #include <fstream>
 #include <set>
+#include <thread>
 #include <sqlite3.h>
 
 using namespace dashboard;
@@ -383,6 +385,46 @@ TEST_F(DashboardModel, PasswordStoreRoundtripAndIndependentConnections) {
   EXPECT_THROW(unprotectPassword(first.id, "dpapi:"), std::exception);
   forgetPassword(first.id, first.credential); forgetPassword(second.id, second.credential);
 }
+TEST_F(DashboardModel, UpdateVersionsCompareNumericallyAndRejectInvalidReleases) {
+  EXPECT_TRUE(newerVersion("1.10.0", "1.9.0"));
+  EXPECT_TRUE(newerVersion("2.0.0", "1.99.99"));
+  EXPECT_TRUE(newerVersion("1.0.1", "1.0.0"));
+  EXPECT_FALSE(newerVersion("1.0.0", "1.0.0"));
+  EXPECT_FALSE(newerVersion("1.9.0", "1.10.0"));
+  for (auto invalid : {"", "1.0", "1.0.0.1", "01.0.0", "ssc-v1.0.0", "1.0.0-beta", "1.0.0\n", "1.0.0;cmd", "99999999999.0.0"})
+    EXPECT_THROW(newerVersion(invalid, "1.0.0"), std::invalid_argument);
+}
+#ifdef _WIN32
+TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPreference) {
+  auto app = directory / std::filesystem::u8path("portable app \xc3\xb8 & (test)");
+  std::filesystem::create_directory(app);
+  std::ofstream(app / "manifest.json") << "{}";
+  std::ofstream(app / "update.ps1") <<
+    "param($Action, $AppDirectory, $WorkDirectory, $InstalledVersion)\n"
+    "$state = if ($Action -eq 'Download') { 'ready' } else { 'available' }\n"
+    "[IO.File]::WriteAllText((Join-Path $WorkDirectory 'status.txt'), ($state + \"`n1.2.0`nFixture update`n\"), [Text.UTF8Encoding]::new($false))\n";
+  AppUpdate updater(directory / "test layouts.db", true, app);
+  ASSERT_TRUE(updater.supported());
+  updater.automatic(false);
+  EXPECT_FALSE(updater.automatic());
+  updater.check();
+  ASSERT_EQ(updater.state(), AppUpdate::State::Checking);
+  auto finish = [&] {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (updater.busy() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20)); updater.poll();
+    }
+  };
+  finish();
+  ASSERT_EQ(updater.state(), AppUpdate::State::Available) << updater.message();
+  EXPECT_EQ(updater.version(), "1.2.0");
+  updater.download(); finish();
+  ASSERT_EQ(updater.state(), AppUpdate::State::Ready) << updater.message();
+  AppUpdate restored(directory / "test layouts.db", true, app);
+  EXPECT_FALSE(restored.automatic());
+  EXPECT_EQ(restored.state(), AppUpdate::State::Ready);
+}
+#endif
 TEST_F(DashboardModel, DuplicateResealsSavedPasswordsForNewIdentifiers) {
   if (!canTestSecrets()) GTEST_SKIP() << "Requires an isolated desktop keyring or Windows DPAPI";
   auto item = panel(); item.credential = protectPassword(item.id, "saved-password!");

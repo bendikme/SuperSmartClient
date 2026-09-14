@@ -15,6 +15,12 @@ $viewer = Join-Path $buildRoot 'vncviewer\vncviewer.exe'
 if (!(Test-Path -LiteralPath $viewer) -or !(Test-Path -LiteralPath $objdump)) {
     throw 'The compiled viewer and MinGW objdump.exe are required.'
 }
+$appVersion = (Get-Content -LiteralPath (Join-Path $repoRoot 'VERSION.txt') -Raw).Trim()
+if ($appVersion -cnotmatch '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$' -or
+    (Get-Content -LiteralPath (Join-Path $buildRoot 'vncviewer\VERSION.txt') -Raw).Trim() -cne $appVersion -or
+    [Diagnostics.FileVersionInfo]::GetVersionInfo($viewer).ProductVersion -cne $appVersion) {
+    throw 'The executable does not match VERSION.txt. Rebuild the viewer before packaging.'
+}
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $outputRoot = (Resolve-Path -LiteralPath $OutputDir).Path
@@ -59,6 +65,8 @@ if (Test-Path -LiteralPath $package) {
 }
 New-Item -ItemType Directory -Path $package -Force | Out-Null
 Copy-Item -LiteralPath $viewer -Destination (Join-Path $package 'SuperSmartClient.exe')
+Copy-Item -LiteralPath (Join-Path $buildRoot 'vncviewer\VERSION.txt') -Destination $package
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'update.ps1') -Destination $package
 Copy-Item -LiteralPath (Join-Path $repoRoot 'media\fonts\roboto') -Destination (Join-Path $package 'fonts') -Recurse
 
 # Resolve transitive DLL imports. System DLLs are supplied by Windows.
@@ -115,6 +123,21 @@ if (Test-Path -LiteralPath $pacman) {
     & $pacman -Q | Set-Content -LiteralPath (Join-Path $package 'build-packages.txt') -Encoding UTF8
     if ($LASTEXITCODE -ne 0) { throw 'Cannot record build dependencies.' }
 }
+$manifestFiles = @(Get-ChildItem -LiteralPath $package -File -Recurse | Sort-Object FullName | ForEach-Object {
+    @{
+        path = $_.FullName.Substring($package.Length + 1).Replace('\', '/')
+        size = $_.Length
+        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+})
+$manifest = @{
+    format = 1
+    product = 'SuperSmartClient'
+    repository = 'https://github.com/bendikme/SuperSmartClient'
+    version = $appVersion
+    files = $manifestFiles
+}
+[IO.File]::WriteAllText((Join-Path $package 'manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 $zip = Join-Path $outputRoot 'SuperSmartClient-windows-x64.zip'
 Compress-Archive -LiteralPath $package -DestinationPath $zip -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $zip |

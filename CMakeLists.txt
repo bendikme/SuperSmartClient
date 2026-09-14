@@ -20,6 +20,12 @@ include(CMakeMacroLibtoolFile)
 
 project(tigervnc)
 set(VERSION 1.16.2)
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION.txt" SUPERSMART_VERSION LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION.txt")
+if(NOT SUPERSMART_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "VERSION.txt must contain the SuperSmartClient major.minor.patch version")
+endif()
+string(REPLACE . , SUPERSMART_RCVERSION "${SUPERSMART_VERSION}.0")
 
 # The RC version must always be four comma-separated numbers
 string(REPLACE . , RCVERSION "${VERSION}.0")
