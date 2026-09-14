@@ -395,9 +395,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("columnWeights=784,524", encoded)
             self.assertEqual([p["columns"] for p in saved_profiles(self.db)], ["1", "1"])
             self.assertEqual(first.inputs + second.inputs, [], "Grid gestures reached a panel")
-            self.click(window, 70, 56)
-            self.xdo("click", "--window", window, "--repeat", 2, "--delay", 100, 1)
-            time.sleep(0.2)
+            self.click(window, 744, 56)  # Focus the first pane.
+            focused = self.picture(window, ".focused.png")
+            self.assertEqual(self.pixel(focused, 1315, 500), (220, 227, 236), "Focused pane does not fill the workspace")
             self.click(window, 640, 20)  # Overview
             # Select the next named layout. The saved startup flag is false;
             # opening the layout must nevertheless connect the whole group.
@@ -500,7 +500,7 @@ class DashboardTests(unittest.TestCase):
             window = self.window()
             self.xdo("windowmove", window, 120, 100)
             self.click(window, 1298, 20)  # Workspace actions on the isolated empty dashboard.
-            self.xdo("key", "Down", "Down", "Down", "Return")  # Dark theme.
+            self.xdo("key", "Down", "Down", "Down", "Down", "Return")  # Dark theme.
             def picture(target, suffix):
                 path = str(SCREENSHOT) + suffix if SCREENSHOT else str(self.case_dir / (suffix + ".png"))
                 return capture_window(target, path)
@@ -675,6 +675,7 @@ class DashboardTests(unittest.TestCase):
             self.xdo("keydown", "a")
             wait_for(lambda: ("key", 1, ord("a")) in servers[0].inputs, "Fixture did not take keyboard focus")
             self.xdo("key", "F11")
+            window = self.window()
             wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Fullscreen did not cover the test display")
             self.xdo("keyup", "a")
             wait_for(lambda: ("key", 0, ord("a")) in servers[0].inputs, "Fullscreen left a remote key held")
@@ -685,22 +686,28 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.pixel(full, 100, 998), (244, 247, 250), "Footer remains in fullscreen")
             self.click(window, 200, 500)
             self.xdo("key", "Escape")
+            window = self.window()
             wait_for(lambda: self.geometry(window) == original, "Escape did not restore window bounds")
             self.assertFalse(any(event[0] == "key" and event[2] in (0xffc8, 0xff1b)
                                  for server in servers for event in server.inputs), "Fullscreen shortcuts reached a panel")
             # The visible exit button consumes its entire click, including release.
             self.click(window, 1070, 20)
+            window = self.window()
             wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Fullscreen button did not enter")
             before = sum(len(server.inputs) for server in servers)
             self.click(window, 1579, 18)
+            window = self.window()
             wait_for(lambda: self.geometry(window) == original, "Exit button did not restore window bounds")
             self.assertEqual(sum(len(server.inputs) for server in servers), before)
             self.assertEqual([server.connections for server in servers], [1, 1])
             # Auto-repeat must not toggle repeatedly while the key is held.
-            self.xdo("keydown", "F11", "keydown", "F11")
+            self.xdo("keydown", "F11")
+            window = self.window()
+            self.xdo("keydown", "F11")
             wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Repeated F11 toggled back out")
             self.xdo("keyup", "F11")
             self.xdo("key", "F11")
+            window = self.window()
             wait_for(lambda: self.geometry(window) == original, "F11 did not restore after repeat")
             encoded = database_layout(self.db)
             self.assertIn("width=1160", encoded)
@@ -727,9 +734,11 @@ class DashboardTests(unittest.TestCase):
                     for key in ("pixelX", "pixelY", "pixelWidth", "pixelHeight", "fit", "scale", "displayPreset"):
                         self.assertEqual(after[key], before[key], f"Arrangement changed saved {key}")
             self.xdo("key", "F11")
+            window = self.window()
             wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Free layout did not enter fullscreen")
             self.picture(window, ".free-fullscreen.png")
             self.xdo("key", "Escape")
+            window = self.window()
             wait_for(lambda: self.geometry(window)["WIDTH"] == 1320, "Free layout did not restore")
             self.choose_preset(window, 2)
             self.choose_preset(window, 9)
