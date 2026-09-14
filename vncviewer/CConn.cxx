@@ -298,7 +298,14 @@ void CConn::socketEvent(FL_SOCKET fd, void *data)
                        "given by the server:\n\n%s"), e.what());
   } catch (std::exception& e) {
     vlog.error("%s", e.what());
-    abort_connection_with_unexpected_error(e);
+    if (unifiedPanel) {
+      abort_connection(_("Unified panel connection failed:\n\n%s\n\n"
+                         "Check SmartServer's secure communication setting "
+                         "and the selected certificate or anonymous TLS mode."),
+                       e.what());
+    } else {
+      abort_connection_with_unexpected_error(e);
+    }
   }
 
   when = FL_READ | FL_EXCEPT;

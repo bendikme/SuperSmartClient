@@ -48,3 +48,14 @@ add_executable(emulatemb emulatemb.cxx ../../vncviewer/EmulateMB.cxx)
 target_include_directories(emulatemb SYSTEM PUBLIC ${Intl_INCLUDE_DIR})
 target_link_libraries(emulatemb core ${Intl_LIBRARIES} GTest::gtest_main)
 gtest_discover_tests(emulatemb)
+
+if(BUILD_VIEWER)
+  add_executable(unifiedpanel unifiedpanel.cxx
+    ../../vncviewer/parameters.cxx
+    ../../vncviewer/MonitorIndicesParameter.cxx)
+  target_include_directories(unifiedpanel SYSTEM PRIVATE
+    ${FLTK_INCLUDE_DIR} ${Intl_INCLUDE_DIR})
+  target_link_libraries(unifiedpanel rfb ${FLTK_LIBRARIES}
+    ${Intl_LIBRARIES} GTest::gtest_main)
+  gtest_discover_tests(unifiedpanel)
+endif()

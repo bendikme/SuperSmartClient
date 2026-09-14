@@ -1,0 +1,80 @@
+name: Unified panels
+
+on:
+  push:
+    branches: [unified-panels]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            libfltk1.3-dev libgnutls28-dev libjpeg-turbo8-dev libpixman-1-dev \
+            zlib1g-dev libgtest-dev libpam0g-dev libxdamage-dev libxfixes-dev \
+            libxrandr-dev libxtst-dev libxi-dev libxinerama-dev libxcursor-dev \
+            libxft-dev libpng-dev xvfb xauth openssl
+      - name: Build
+        run: |
+          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
+            -DENABLE_H264=OFF -DENABLE_WAYLAND=OFF -DENABLE_NLS=OFF
+          cmake --build build-linux --target vncviewer unifiedpanel --parallel 4
+      - name: Test profile and TLS connections
+        run: |
+          ctest --test-dir build-linux/tests/unit -R UnifiedPanel --output-on-failure
+          xvfb-run -a python3 tests/integration/unified_panel.py \
+            --viewer build-linux/vncviewer/vncviewer
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja mingw-w64-x86_64-fltk1.3
+            mingw-w64-x86_64-libjpeg-turbo mingw-w64-x86_64-gnutls
+            mingw-w64-x86_64-pixman mingw-w64-x86_64-gtest
+      - name: Build and test
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
+            -DENABLE_H264=OFF -DENABLE_NLS=OFF
+          cmake --build build-windows --target vncviewer unifiedpanel --parallel 4
+          ctest --test-dir build-windows/tests/unit -R UnifiedPanel --output-on-failure
+      - name: Test TLS connections
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $env:PATH = "$(Join-Path $env:MSYS2_LOCATION 'mingw64/bin');$env:PATH"
+          python tests/integration/unified_panel.py --viewer build-windows/vncviewer/vncviewer.exe
+      - name: Package portable viewer
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          ./contrib/unified/package-windows.ps1 -BuildDir build-windows `
+            -RuntimeBin (Join-Path $env:MSYS2_LOCATION 'mingw64/bin')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SuperSmartClient-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256

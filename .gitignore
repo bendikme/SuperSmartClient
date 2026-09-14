@@ -13,3 +13,10 @@ config.h
 cmake_install.cmake
 cmake_uninstall.cmake
 install_manifest.txt
+
+# Local builds and downloaded toolchains
+/.tools/
+/build*/
+/build*.log
+/dist/
+__pycache__/

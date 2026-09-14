@@ -1,6 +1,11 @@
 name: Build
 
-on: [push, pull_request]
+# The fork's default branch uses the viewer-focused unified-panels.yml workflow.
+on:
+  push:
+    branches-ignore: [unified-panels]
+  pull_request:
+    branches-ignore: [unified-panels]
 
 jobs:
   build-linux:

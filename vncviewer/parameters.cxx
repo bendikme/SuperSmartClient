@@ -195,6 +195,40 @@ core::BoolParameter
          false);
 
 core::BoolParameter
+  unifiedPanel("UnifiedPanel",
+               "Use the Siemens Unified Comfort panel profile "
+               "(TLS, VNC password, shared access, fixed panel size)",
+               true);
+core::EnumParameter
+  unifiedSecurity("UnifiedSecurity",
+                  "Unified panel TLS mode: Certificate or AnonymousTLS",
+                  {"Certificate", "AnonymousTLS"}, "Certificate");
+
+void applyUnifiedPanelProfile()
+{
+  if (!unifiedPanel)
+    return;
+
+#ifndef HAVE_GNUTLS
+  throw std::runtime_error(_("Unified panels require a viewer built with "
+                             "GnuTLS support (ENABLE_GNUTLS=ON)."));
+#else
+  // Apply after loading settings, before CConnection snapshots SecurityTypes.
+  // Never fall back to an unencrypted or passwordless security type.
+  rfb::SecurityClient::secTypes.setParam(
+    unifiedSecurity == "AnonymousTLS" ? "TLSVnc" : "X509Vnc");
+  shared.setParam(true);
+  remoteResize.setParam(false);
+  desktopSize.setParam("");
+  sendClipboard.setParam(false);
+  acceptClipboard.setParam(false);
+#if !defined(WIN32) && !defined(__APPLE__)
+  sendPrimary.setParam(false);
+#endif
+#endif
+}
+
+core::BoolParameter
   acceptClipboard("AcceptClipboard",
                   "Accept clipboard changes from the server",
                   true);
@@ -249,6 +283,9 @@ static const char* IDENTIFIER_STRING = "TigerVNC Configuration file Version 1.0"
  * the graphical user interface
  */
 static core::VoidParameter* parameterArray[] = {
+  /* Siemens Unified Comfort panels */
+  &unifiedPanel,
+  &unifiedSecurity,
   /* Security */
 #ifdef HAVE_GNUTLS
   &rfb::CSecurityTLS::X509CA,

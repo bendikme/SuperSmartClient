@@ -181,6 +181,13 @@ static void mainloop(const char* vncserver, network::Socket* sock)
 
     exitMainloop = false;
 
+    try {
+      applyUnifiedPanelProfile();
+    } catch (std::exception& e) {
+      abort_vncviewer(_("Unable to configure the connection:\n\n%s"), e.what());
+      return;
+    }
+
     cc = new CConn();
     cc->connect(vncserver, sock);
 

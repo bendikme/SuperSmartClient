@@ -27,6 +27,8 @@
 
 class Fl_Widget;
 class Fl_Input_Choice;
+class Fl_Choice;
+class Fl_Check_Button;
 
 class ServerDialog : public Fl_Window {
 protected:
@@ -43,17 +45,22 @@ protected:
   static void handleAbout(Fl_Widget *widget, void *data);
   static void handleCancel(Fl_Widget *widget, void *data);
   static void handleConnect(Fl_Widget *widget, void *data);
+  static void handleProfile(Fl_Widget *widget, void *data);
+  static void handleOptionsChanged(void *data);
 
 private:
   void loadServerHistory();
   void saveServerHistory();
   void updateUsedDir(const char* filename);
+  void loadProfile();
 
   static void onServerHistoryRemove(Fl_Widget*, std::string s, void* data);
   static std::string serverHistoryNormalize(const std::string s);
 
 protected:
   Fl_Suggestion_Input *serverName;
+  Fl_Choice *profileChoice;
+  Fl_Check_Button *monitorCheckbox;
   std::list<std::string> serverHistory;
   std::string usedDir;
 };

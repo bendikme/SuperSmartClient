@@ -34,6 +34,8 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Input_Choice.H>
 #include <FL/Fl_Button.H>
+#include <FL/Fl_Choice.H>
+#include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Return_Button.H>
 #include <FL/fl_draw.H>
 #include <FL/fl_ask.H>
@@ -61,7 +63,7 @@ static core::LogWriter vlog("ServerDialog");
 const char* SERVER_HISTORY="tigervnc.history";
 
 ServerDialog::ServerDialog()
-  : Fl_Window(450, 0, "TigerVNC")
+  : Fl_Window(500, 0, "SuperSmartClient - TigerVNC")
 {
   int x, y, x2;
   Fl_Button *button;
@@ -77,6 +79,30 @@ ServerDialog::ServerDialog()
   serverName->call_to_normalize(serverHistoryNormalize);
 
   y += INPUT_HEIGHT + INNER_MARGIN;
+
+  Fl_Box *hint = new Fl_Box(x, y, w() - OUTER_MARGIN*2, 20,
+                            _("Address: panel IP or hostname::port (default 5900)"));
+  hint->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+  y += hint->h() + INNER_MARGIN;
+
+  profileChoice = new Fl_Choice(
+    LBLLEFT(x, y, w() - OUTER_MARGIN*2, INPUT_HEIGHT, _("Connection:")));
+  profileChoice->add(_("Standard VNC"));
+  profileChoice->add(_("Unified panel - certificate TLS"));
+  profileChoice->add(_("Unified panel - anonymous TLS (legacy)"));
+  profileChoice->tooltip(_("Certificate TLS verifies the panel certificate. "
+                           "Anonymous TLS encrypts traffic without verifying "
+                           "the panel identity. Both require a VNC password."));
+  profileChoice->callback(handleProfile, this);
+  y += INPUT_HEIGHT + INNER_MARGIN;
+
+  monitorCheckbox = new Fl_Check_Button(
+    LBLRIGHT(x, y, CHECK_MIN_WIDTH, CHECK_HEIGHT, _("Monitor only (no mouse or keyboard control)")));
+  monitorCheckbox->callback(handleProfile, this);
+  y += CHECK_HEIGHT + INNER_MARGIN;
+
+  loadProfile();
+  OptionsDialog::addCallback(handleOptionsChanged, this);
 
   x2 = x;
 
@@ -127,6 +153,28 @@ ServerDialog::ServerDialog()
 
 ServerDialog::~ServerDialog()
 {
+  OptionsDialog::removeCallback(handleOptionsChanged);
+}
+
+void ServerDialog::loadProfile()
+{
+  profileChoice->value(!unifiedPanel ? 0 :
+                        unifiedSecurity == "AnonymousTLS" ? 2 : 1);
+  monitorCheckbox->value(viewOnly);
+}
+
+void ServerDialog::handleOptionsChanged(void* data)
+{
+  ((ServerDialog*)data)->loadProfile();
+}
+
+void ServerDialog::handleProfile(Fl_Widget*, void* data)
+{
+  ServerDialog* dialog = (ServerDialog*)data;
+  unifiedPanel.setParam(dialog->profileChoice->value() != 0);
+  unifiedSecurity.setParam(dialog->profileChoice->value() == 2 ?
+                             "AnonymousTLS" : "Certificate");
+  viewOnly.setParam(dialog->monitorCheckbox->value());
 }
 
 
@@ -160,6 +208,12 @@ void ServerDialog::run(const char* servername, char *newservername)
 
 void ServerDialog::handleOptions(Fl_Widget* /*widget*/, void* /*data*/)
 {
+  try {
+    applyUnifiedPanelProfile();
+  } catch (std::exception& e) {
+    fl_alert("%s", e.what());
+    return;
+  }
   OptionsDialog::showDialog();
 }
 
@@ -193,6 +247,7 @@ void ServerDialog::handleLoad(Fl_Widget* /*widget*/, void* data)
 
   try {
     dialog->serverName->value(loadViewerParameters(filename));
+    dialog->loadProfile();
   } catch (std::exception& e) {
     vlog.error("%s", e.what());
     fl_alert(_("Unable to load the specified configuration file:\n\n%s"),
@@ -253,6 +308,7 @@ void ServerDialog::handleSaveAs(Fl_Widget* /*widget*/, void* data)
   }
   
   try {
+    applyUnifiedPanelProfile();
     saveViewerParameters(filename, servername);
   } catch (std::exception& e) {
     vlog.error("%s", e.what());
@@ -283,6 +339,17 @@ void ServerDialog::handleConnect(Fl_Widget* /*widget*/, void *data)
 {
   ServerDialog *dialog = (ServerDialog*)data;
   const char* servername = dialog->serverName->value();
+
+  if (!servername || !servername[0]) {
+    fl_alert(_("Enter the panel IP address or hostname."));
+    return;
+  }
+  try {
+    applyUnifiedPanelProfile();
+  } catch (std::exception& e) {
+    fl_alert("%s", e.what());
+    return;
+  }
 
   dialog->hide();
 

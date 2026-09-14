@@ -364,6 +364,30 @@ void OptionsDialog::loadOptions(void)
     cursorTypeChoice->value(0);
   }
   handleAlwaysCursor(alwaysCursorCheckbox, this);
+
+  // These settings are fixed by the Unified panel connection profile.
+  for (Fl_Widget* widget : {
+         (Fl_Widget*)sharedCheckbox, (Fl_Widget*)acceptClipboardCheckbox,
+         (Fl_Widget*)sendClipboardCheckbox,
+#if !defined(WIN32) && !defined(__APPLE__)
+         (Fl_Widget*)sendPrimaryCheckbox,
+#endif
+#if defined(HAVE_GNUTLS) || defined(HAVE_NETTLE)
+         (Fl_Widget*)encNoneCheckbox, (Fl_Widget*)authNoneCheckbox,
+         (Fl_Widget*)authVncCheckbox, (Fl_Widget*)authPlainCheckbox,
+#endif
+#ifdef HAVE_GNUTLS
+         (Fl_Widget*)encTLSCheckbox, (Fl_Widget*)encX509Checkbox,
+#endif
+#ifdef HAVE_NETTLE
+         (Fl_Widget*)encRSAAESCheckbox,
+#endif
+       }) {
+    if (unifiedPanel)
+      widget->deactivate();
+    else
+      widget->activate();
+  }
 }
 
 
@@ -519,6 +543,8 @@ void OptionsDialog::storeOptions(void)
     // Default
     cursorType.setParam("Dot");
   }
+
+  applyUnifiedPanelProfile();
 
   std::map<OptionsCallback*, void*>::const_iterator iter;
 

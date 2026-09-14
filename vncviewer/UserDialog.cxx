@@ -148,6 +148,8 @@ void UserDialog::getUserPasswd(bool secure_, std::string* user,
   int x, y;
 
   win = new Fl_Window(410, 0, _("VNC authentication"));
+  if (unifiedPanel)
+    win->label(_("Unified panel SmartServer authentication"));
   win->callback(button_cb, 1);
 
   banner = new Fl_Box(0, 0, win->w(), 20);
@@ -158,8 +160,13 @@ void UserDialog::getUserPasswd(bool secure_, std::string* user,
     banner->color(FL_GREEN);
     banner->image(secure_icon);
   } else {
-    banner->label(_("This connection is not secure"));
-    banner->color(FL_RED);
+    if (unifiedPanel) {
+      banner->label(_("TLS encrypted; panel identity unverified"));
+      banner->color(fl_rgb_color(255, 200, 80));
+    } else {
+      banner->label(_("This connection is not secure"));
+      banner->color(FL_RED);
+    }
     banner->image(insecure_icon);
   }
 
@@ -195,6 +202,8 @@ void UserDialog::getUserPasswd(bool secure_, std::string* user,
   passwd = new Fl_Secret_Input(x, y, win->w()- x - OUTER_MARGIN,
                                INPUT_HEIGHT, _("Password:"));
   passwd->align(FL_ALIGN_LEFT | FL_ALIGN_TOP);
+  if (unifiedPanel)
+    passwd->label(_("SmartServer password:"));
   y += INPUT_HEIGHT + INNER_MARGIN;
 
   if (reconnectOnError) {
