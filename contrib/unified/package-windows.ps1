@@ -46,9 +46,18 @@ if (Test-Path -LiteralPath $package) {
         $_.ExecutablePath -and $_.ExecutablePath.StartsWith($resolvedPackage + '\', [StringComparison]::OrdinalIgnoreCase)
     }
     if ($running) { throw "The packaged app is running. Close it before replacing $resolvedPackage" }
-    Remove-Item -LiteralPath $resolvedPackage -Recurse -Force
+    # A shell or Explorer can hold the directory open even when the app is
+    # closed. Preserve that directory and refresh only its generated contents.
+    Get-ChildItem -LiteralPath $resolvedPackage -Force | ForEach-Object {
+        $generatedItem = [IO.Path]::GetFullPath($_.FullName)
+        if (!$generatedItem.StartsWith($resolvedPackage + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Refusing to remove package contents outside the output directory or through a directory link.'
+        }
+        Remove-Item -LiteralPath $generatedItem -Recurse -Force
+    }
 }
-New-Item -ItemType Directory -Path $package | Out-Null
+New-Item -ItemType Directory -Path $package -Force | Out-Null
 Copy-Item -LiteralPath $viewer -Destination (Join-Path $package 'SuperSmartClient.exe')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'media\fonts\roboto') -Destination (Join-Path $package 'fonts') -Recurse
 
