@@ -366,14 +366,31 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(Path(f"/proc/{pid}/comm").read_text().strip(), "Xvfb")
 
     def window(self):
-        # FLTK recreates an untitled override-redirect window for fullscreen
-        # without a window manager. Keep targeting this fixture's PID and choose
-        # its main window by area, excluding any small tooltip windows.
-        windows = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid).splitlines()
-        window = max(windows, key=lambda item: self.geometry(item)["WIDTH"] * self.geometry(item)["HEIGHT"])
-        self.assertEqual(int(self.xdo("getwindowpid", window)), self.process.pid)
-        self.xdo("windowfocus", "--sync", window)
-        return window
+        # Fullscreen without a window manager recreates an untitled X11 window.
+        # A tooltip from the same PID may disappear between enumeration and the
+        # geometry query. Retry that race while preserving strict PID isolation.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            self.assertIsNone(self.process.poll(), "Dashboard unexpectedly exited")
+            candidates = []
+            try:
+                windows = self.xdo("search", "--all", "--onlyvisible", "--pid", self.process.pid).splitlines()
+                for window in windows:
+                    try:
+                        bounds = self.geometry(window)
+                        if bounds["WIDTH"] >= 860 and bounds["HEIGHT"] >= 600:
+                            candidates.append((bounds["WIDTH"] * bounds["HEIGHT"], window))
+                    except subprocess.CalledProcessError:
+                        continue
+                if candidates:
+                    window = max(candidates)[1]
+                    self.assertEqual(int(self.xdo("getwindowpid", window)), self.process.pid)
+                    self.xdo("windowfocus", "--sync", window)
+                    return window
+            except subprocess.CalledProcessError:
+                pass
+            time.sleep(0.04)
+        self.fail("Cannot find this fixture's dashboard window")
 
     def click(self, window, x, y):
         self.xdo("mousemove", "--window", window, x, y)
