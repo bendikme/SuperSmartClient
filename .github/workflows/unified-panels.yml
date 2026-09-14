@@ -26,19 +26,26 @@ jobs:
             libsecret-1-dev libsecret-tools gnome-keyring dbus-x11
       - name: Build
         run: |
-          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
             -DENABLE_H264=OFF -DENABLE_WAYLAND=OFF -DENABLE_NLS=OFF
-          cmake --build build-linux --target vncviewer unifiedpanel dashboardmodel --parallel 4
+          cmake --build build --target vncviewer unifiedpanel dashboardmodel --parallel 4
       - name: Test profile and TLS connections
         run: |
-          ctest --test-dir build-linux/tests/unit -R UnifiedPanel --output-on-failure
+          ctest --test-dir build/tests/unit -R UnifiedPanel --output-on-failure
           xvfb-run -a python3 tests/integration/unified_panel.py \
-            --viewer build-linux/vncviewer/vncviewer --input-tests
-          bash tests/integration/isolated-keyring.sh ctest --test-dir build-linux/tests/unit \
+            --viewer build/vncviewer/vncviewer --input-tests
+          bash tests/integration/isolated-keyring.sh ctest --test-dir build/tests/unit \
             -R DashboardModel --output-on-failure
+          mkdir -p build/preview
           bash tests/integration/isolated-keyring.sh xvfb-run -a -s '-screen 0 1600x1000x24' \
-            python3 tests/integration/dashboard.py --viewer build-linux/vncviewer/vncviewer --input-tests
+            python3 tests/integration/dashboard.py --viewer build/vncviewer/vncviewer --input-tests \
+            --screenshot build/preview/dashboard.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dashboard-preview
+          path: build/preview/*.png
 
   windows:
     runs-on: windows-latest
@@ -58,29 +65,29 @@ jobs:
       - name: Build and test
         shell: msys2 {0}
         run: |
-          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
             -DENABLE_H264=OFF -DENABLE_NLS=OFF
-          cmake --build build-windows --target vncviewer unifiedpanel dashboardmodel --parallel 4
-          ctest --test-dir build-windows/tests/unit -R 'UnifiedPanel|DashboardModel' --output-on-failure
+          cmake --build build --target vncviewer unifiedpanel dashboardmodel --parallel 4
+          ctest --test-dir build/tests/unit -R 'UnifiedPanel|DashboardModel' --output-on-failure
       - name: Test TLS connections
         shell: pwsh
         env:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $env:PATH = "$(Join-Path $env:MSYS2_LOCATION 'mingw64/bin');$env:PATH"
-          python tests/integration/unified_panel.py --viewer build-windows/vncviewer/vncviewer.exe
-          python tests/integration/dashboard.py --viewer build-windows/vncviewer/vncviewer.exe
+          python tests/integration/unified_panel.py --viewer build/vncviewer/vncviewer.exe
+          python tests/integration/dashboard.py --viewer build/vncviewer/vncviewer.exe
       - name: Package portable viewer
         shell: pwsh
         env:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          ./contrib/unified/package-windows.ps1 -BuildDir build-windows `
+          ./contrib/unified/package-windows.ps1 -BuildDir build `
             -RuntimeBin (Join-Path $env:MSYS2_LOCATION 'mingw64/bin')
       - uses: actions/upload-artifact@v4
         with:
           name: SuperSmartClient-windows-x64
           path: |
-            dist/*.zip
-            dist/*.sha256
+            dist/workspaces/*.zip
+            dist/workspaces/*.sha256

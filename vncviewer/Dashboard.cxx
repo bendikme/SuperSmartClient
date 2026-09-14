@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <core/string.h>
@@ -44,13 +45,34 @@ Palette palette(bool dark)
 }
 void rounded(int x, int y, int w, int h, Fl_Color color, int radius = 8)
 {
+  radius = std::min(radius, std::min(w, h) / 2);
+  if (radius < 1) { fl_color(color); fl_rectf(x, y, w, h); return; }
   fl_color(color);
   fl_rectf(x + radius, y, w - 2 * radius, h);
   fl_rectf(x, y + radius, w, h - 2 * radius);
-  fl_pie(x, y, radius * 2, radius * 2, 90, 180);
-  fl_pie(x + w - radius * 2, y, radius * 2, radius * 2, 0, 90);
-  fl_pie(x, y + h - radius * 2, radius * 2, radius * 2, 180, 270);
-  fl_pie(x + w - radius * 2, y + h - radius * 2, radius * 2, radius * 2, 270, 360);
+  // Windows GDI's partial pies have inconsistent corner geometry. Cached
+  // alpha corners give the same smooth outline on Windows and X11.
+  static std::map<std::pair<int, Fl_Color>, std::unique_ptr<Fl_RGB_Image>> corners;
+  auto& corner = corners[{radius, color}];
+  if (!corner) {
+    int diameter = radius * 2;
+    auto* pixels = new unsigned char[diameter * diameter * 4];
+    unsigned char red, green, blue; Fl::get_color(color, red, green, blue);
+    for (int row = 0; row < diameter; ++row) for (int col = 0; col < diameter; ++col) {
+      int coverage = 0;
+      for (int sy = 0; sy < 4; ++sy) for (int sx = 0; sx < 4; ++sx) {
+        double dx = col + (sx + 0.5) / 4 - radius, dy = row + (sy + 0.5) / 4 - radius;
+        coverage += dx * dx + dy * dy <= radius * radius;
+      }
+      auto* pixel = pixels + (row * diameter + col) * 4;
+      pixel[0] = red; pixel[1] = green; pixel[2] = blue; pixel[3] = coverage * 255 / 16;
+    }
+    corner.reset(new Fl_RGB_Image(pixels, diameter, diameter, 4)); corner->alloc_array = 1;
+  }
+  corner->draw(x, y, radius, radius, 0, 0);
+  corner->draw(x + w - radius, y, radius, radius, radius, 0);
+  corner->draw(x, y + h - radius, radius, radius, 0, radius);
+  corner->draw(x + w - radius, y + h - radius, radius, radius, radius, radius);
 }
 void caption(const std::string& text, int x, int y, int w, int h,
              Fl_Color color, int size = 13, bool bold = false,
@@ -70,25 +92,68 @@ class Button : public Fl_Button {
 public:
   Button(int x, int y, int w, int h, const char* text, bool primary = false)
     : Fl_Button(x, y, w, h, text), primary_(primary) { box(FL_NO_BOX); }
-  void theme(const Palette& colors) { colors_ = colors; redraw(); }
+  void theme(const Palette& colors, Fl_Color background) { colors_ = colors; background_ = background; redraw(); }
   void draw() override {
-    rounded(x(), y(), w(), h(), value() ? colors_.border :
-      primary_ ? colors_.accent : colors_.card, 7);
+    fl_color(background_); fl_rectf(x(), y(), w(), h());
+    Fl_Color fill = primary_ ? fl_rgb_color(37, 99, 235) : colors_.card;
+    if (value()) fill = fl_color_average(fill, colors_.text, 0.85f);
+    else if (hover_) fill = fl_color_average(fill, primary_ ? FL_WHITE : colors_.accent, 0.92f);
+    rounded(x(), y(), w(), h(), Fl::focus() == this ? colors_.accent : primary_ ? fill : colors_.border, 9);
+    rounded(x() + 1, y() + 1, w() - 2, h() - 2, fill, 8);
     caption(label(), x() + 6, y(), w() - 12, h(), primary_ ? FL_WHITE : colors_.text,
       13, primary_, FL_ALIGN_CENTER);
-    if (Fl::focus() == this) {
-      fl_color(primary_ ? FL_WHITE : colors_.accent);
-      fl_rect(x() + 3, y() + 3, w() - 6, h() - 6);
-    }
+  }
+  int handle(int event) override {
+    if (event == FL_ENTER || event == FL_LEAVE) { hover_ = event == FL_ENTER; redraw(); }
+    return Fl_Button::handle(event);
   }
 private:
   bool primary_;
+  bool hover_ = false;
   Palette colors_ = palette(false);
+  Fl_Color background_ = palette(false).background;
 };
+
+class Choice : public Fl_Choice {
+public:
+  using Fl_Choice::Fl_Choice;
+  void theme(const Palette& colors, Fl_Color background) {
+    colors_ = colors; background_ = background;
+    color(colors.card); textcolor(colors.text); labelcolor(colors.text);
+    selection_color(fl_rgb_color(37, 99, 235)); textsize(12); box(FL_FLAT_BOX); down_box(FL_FLAT_BOX);
+    redraw();
+  }
+  void draw() override {
+    fl_color(background_); fl_rectf(x(), y(), w(), h());
+    rounded(x(), y(), w(), h(), Fl::focus() == this ? colors_.accent : colors_.border, 7);
+    rounded(x() + 1, y() + 1, w() - 2, h() - 2, color(), 6);
+    Fl_Color ink = active_r() ? textcolor() : colors_.muted;
+    if (mvalue()) caption(mvalue()->label(), x() + 9, y(), w() - 33, h(), ink, textsize());
+    fl_color(ink); int right = x() + w() - 13, middle = y() + h() / 2;
+    fl_line(right - 4, middle - 2, right, middle + 2, right + 4, middle - 2);
+    draw_label();
+  }
+private:
+  Palette colors_ = palette(false);
+  Fl_Color background_ = palette(false).background;
+};
+
+void styleDialog(Fl_Group& dialog, const Palette& colors) {
+  dialog.color(colors.background);
+  for (int i = 0; i < dialog.children(); ++i) {
+    auto* widget = dialog.child(i); widget->labelcolor(colors.text);
+    if (auto* button = dynamic_cast<Button*>(widget)) button->theme(colors, colors.background);
+    else if (auto* choice = dynamic_cast<Choice*>(widget)) choice->theme(colors, colors.background);
+    else if (auto* input = dynamic_cast<Fl_Input_*>(widget)) {
+      input->color(colors.card); input->textcolor(colors.text); input->cursor_color(colors.accent);
+      input->selection_color(fl_rgb_color(37, 99, 235)); input->box(FL_BORDER_BOX);
+    } else { widget->color(colors.background); widget->selection_color(colors.accent); }
+  }
+}
 
 class Editor : public Fl_Double_Window {
 public:
-  Editor(const Panel& panel, bool fresh)
+  Editor(const Panel& panel, bool fresh, const Palette& colors)
     : Fl_Double_Window(540, 552, fresh ? "Add panel - SuperSmartClient" : "Edit panel - SuperSmartClient"),
       result(panel)
   {
@@ -104,7 +169,7 @@ public:
     address_->align(FL_ALIGN_TOP_LEFT); address_->value(panel.address.c_str());
     auto* addressHint = new Fl_Box(28, 189, 484, 21, "Optional port: 192.168.1.20::5900");
     addressHint->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE); addressHint->labelsize(11);
-    security_ = new Fl_Choice(28, 241, 484, 34, "Connection security");
+    security_ = new Choice(28, 241, 484, 34, "Connection security");
     security_->align(FL_ALIGN_TOP_LEFT);
     security_->add("Unified - certificate TLS|Unified - anonymous TLS|Standard VNC (unencrypted)");
     security_->value(panel.security == SecurityMode::Certificate ? 0 :
@@ -136,7 +201,7 @@ public:
     save->callback([](Fl_Widget*, void* data) { static_cast<Editor*>(data)->save(false); }, this);
     connect->callback([](Fl_Widget*, void* data) { static_cast<Editor*>(data)->save(true); }, this);
     callback([](Fl_Widget* widget, void*) { widget->hide(); });
-    end(); set_modal();
+    end(); set_modal(); styleDialog(*this, colors);
   }
   bool run() { show(); name_->take_focus(); while (shown()) Fl::wait(); return accepted; }
   Panel result;
@@ -169,7 +234,7 @@ private:
 
 class ExportDialog : public Fl_Double_Window {
 public:
-  ExportDialog() : Fl_Double_Window(500, 274, "Export database - SuperSmartClient") {
+  ExportDialog(const Palette& colors) : Fl_Double_Window(500, 274, "Export database - SuperSmartClient") {
     color(palette(false).background); begin();
     include_ = new Fl_Check_Button(24, 23, 452, 30, "Include saved passwords");
 #ifdef HAVE_GNUTLS
@@ -198,7 +263,7 @@ public:
       if (dialog.include_->value()) dialog.password_->activate(); else dialog.password_->deactivate();
     }, this);
     callback([](Fl_Widget* widget, void*) { widget->hide(); });
-    end(); set_modal();
+    end(); set_modal(); styleDialog(*this, colors);
   }
   bool run() { show(); password_->take_focus(); while (shown()) Fl::wait(); return accepted; }
   std::string password;
@@ -210,11 +275,11 @@ private:
 
 class ViewDialog : public Fl_Double_Window {
 public:
-  ViewDialog(const Panel& panel, int serverWidth, int serverHeight)
+  ViewDialog(const Panel& panel, int serverWidth, int serverHeight, const Palette& colors)
     : Fl_Double_Window(500, 326, "Panel size and scale - SuperSmartClient"), result(panel),
       serverWidth_(serverWidth), serverHeight_(serverHeight) {
     color(palette(false).background); begin();
-    screen_ = new Fl_Choice(24, 55, 452, 32, "Siemens screen size");
+    screen_ = new Choice(24, 55, 452, 32, "Siemens screen size");
     screen_->align(FL_ALIGN_TOP_LEFT); screen_->add("Automatic - use the panel's resolution");
     int selected = 0;
     const auto& sizes = unifiedDisplaySizes();
@@ -246,7 +311,7 @@ public:
       } catch (const std::exception& error) { fl_alert("%s", error.what()); }
     }, this);
     callback([](Fl_Widget* widget, void*) { widget->hide(); });
-    end(); set_modal(); preview();
+    end(); set_modal(); styleDialog(*this, colors); preview();
   }
   bool run() { show(); while (shown()) Fl::wait(); return accepted; }
   Panel result;
@@ -326,15 +391,15 @@ public:
     disconnect_ = new Button(0, 0, 118, 34, "Disconnect all");
     back_ = new Button(0, 0, 112, 34, "Back to grid"); back_->hide();
     theme_ = new Button(0, 0, 100, 34, "Dark theme");
-    layouts_ = new Fl_Choice(0, 0, 254, 32);
+    layouts_ = new Choice(0, 0, 254, 32);
     libraryMenu_ = new Button(0, 0, 100, 34, "Layouts...");
-    preset_ = new Fl_Choice(0, 0, 205, 27);
+    preset_ = new Choice(0, 0, 205, 27);
     preset_->add("Custom grid|1 - Single|2 - Side by side|2 - Stacked|3 - Top + two below|3 - Left + two right|4 - Grid 2 x 2|6 - Grid 3 x 2|9 - Grid 3 x 3|Free placement");
     preset_->value(static_cast<int>(workspace_.preset));
     preset_->tooltip("Choose a preset or place windows freely. Extra panels continue below the arrangement.");
-    columns_ = new Fl_Choice(0, 0, 60, 32);
+    columns_ = new Choice(0, 0, 60, 32);
     columns_->add("1|2|3|4"); columns_->value(workspace_.columns - 1);
-    height_ = new Fl_Choice(0, 0, 118, 32);
+    height_ = new Choice(0, 0, 118, 32);
     height_->add("Fit window|Compact|Comfortable|Large");
     height_->value(heightChoice());
     scroll_ = new Fl_Scroll(24, 144, w() - 48, h() - 194);
@@ -414,7 +479,7 @@ public:
       profile.pixelX = std::min(65535, tiles_.back()->panel.pixelX + 24);
       profile.pixelY = std::min(65535, tiles_.back()->panel.pixelY + 24);
     }
-    Editor dialog(profile, !tile);
+    Editor dialog(profile, !tile, colors());
     if (!dialog.run()) return;
     Workspace candidate = snapshot();
     if (tile) candidate.panels[index(tile)] = dialog.result;
@@ -445,7 +510,7 @@ public:
       {"Size and scale...", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {nullptr, 0, nullptr, nullptr, 0, 0, 0, 0, 0}
     };
-    const Fl_Menu_Item* choice = items->popup(Fl::event_x_root(), Fl::event_y_root());
+    const Fl_Menu_Item* choice = items->popup(Fl::event_x(), Fl::event_y(), nullptr, nullptr, layouts_);
     if (!choice) return;
     switch (choice - items) {
       case 0: edit(tile); break;
@@ -605,7 +670,7 @@ private:
     arrange(); save();
   }
   void viewSettings(Tile* tile) {
-    ViewDialog dialog(tile->panel, tile->session.width(), tile->session.height()); if (!dialog.run()) return;
+    ViewDialog dialog(tile->panel, tile->session.width(), tile->session.height(), colors()); if (!dialog.run()) return;
     if (!dialog.result.fit && !freePlacement()) choosePreset(Preset::Free);
     tile->panel.displayWidth = dialog.result.displayWidth; tile->panel.displayHeight = dialog.result.displayHeight;
     tile->panel.displayPreset = dialog.result.displayPreset;
@@ -624,7 +689,7 @@ private:
       {"Disconnect all", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {nullptr, 0, nullptr, nullptr, 0, 0, 0, 0, 0}
     };
-    const auto* choice = items->popup(libraryMenu_->x() + x(), libraryMenu_->y() + y() + libraryMenu_->h());
+    const auto* choice = items->pulldown(libraryMenu_->x(), libraryMenu_->y(), libraryMenu_->w(), libraryMenu_->h(), nullptr, layouts_);
     if (!choice || !save()) return;
     try {
       size_t number = activeLayout(library_);
@@ -651,7 +716,7 @@ private:
         saveLibrary(path_, candidate); loadLayout(std::move(candidate), false);
         for (const auto& panel : removed.workspace.panels) forgetPassword(panel.id, panel.credential);
       } else if (action == 4) {
-        ExportDialog dialog; if (!dialog.run()) return;
+        ExportDialog dialog(colors()); if (!dialog.run()) return;
         Fl_Native_File_Chooser file(Fl_Native_File_Chooser::BROWSE_SAVE_FILE);
         file.title("Export SuperSmartClient database"); file.filter("SuperSmartClient database\t*.sscdb");
         file.preset_file("SuperSmartClient.sscdb"); file.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
@@ -684,12 +749,14 @@ private:
   }
   void applyTheme() {
     const auto p = colors(); color(p.background); scroll_->color(p.background);
-    for (auto* button : {add_, connect_, disconnect_, back_, theme_, libraryMenu_}) button->theme(p);
+    Fl::set_color(FL_BACKGROUND_COLOR, p.background); Fl::set_color(FL_BACKGROUND2_COLOR, p.card);
+    Fl::set_color(FL_FOREGROUND_COLOR, p.text); Fl::set_color(FL_INACTIVE_COLOR, p.muted);
+    Fl::set_color(FL_SELECTION_COLOR, fl_rgb_color(37, 99, 235));
+    for (auto* button : {add_, connect_, disconnect_, libraryMenu_}) button->theme(p, fl_rgb_color(19, 33, 53));
+    for (auto* button : {back_, theme_}) button->theme(p, p.background);
     theme_->label(workspace_.dark ? "Light theme" : "Dark theme");
-    for (auto* choice : {columns_, height_, layouts_, preset_}) {
-      choice->color(p.card); choice->textcolor(p.text); choice->labelcolor(p.text);
-      choice->selection_color(p.soft); choice->box(FL_FLAT_BOX); choice->textsize(12);
-    }
+    for (auto* choice : {columns_, height_, preset_}) choice->theme(p, p.background);
+    layouts_->theme(p, fl_rgb_color(19, 33, 53));
     redraw();
   }
   void arrange() {
@@ -785,7 +852,7 @@ private:
   Fl_Scroll* scroll_ = nullptr;
   Fl_Box* anchor_;
   Button *add_, *connect_, *disconnect_, *back_, *theme_, *libraryMenu_;
-  Fl_Choice *columns_, *height_, *layouts_, *preset_;
+  Choice *columns_, *height_, *layouts_, *preset_;
   int cellWidth_ = 400, cellHeight_ = 260;
 };
 

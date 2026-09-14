@@ -15,11 +15,11 @@ pacman -S --needed make mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake \
   mingw-w64-x86_64-libjpeg-turbo mingw-w64-x86_64-gnutls \
   mingw-w64-x86_64-pixman mingw-w64-x86_64-gtest mingw-w64-x86_64-sqlite3
 
-cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
   -DENABLE_H264=OFF -DENABLE_NLS=OFF
-cmake --build build-windows --target vncviewer unifiedpanel dashboardmodel --parallel
-ctest --test-dir build-windows/tests/unit -R 'UnifiedPanel|DashboardModel' --output-on-failure
+cmake --build build --target vncviewer unifiedpanel dashboardmodel --parallel
+ctest --test-dir build/tests/unit -R 'UnifiedPanel|DashboardModel' --output-on-failure
 ```
 
 FLTK **1.3** is required by the upstream release. RSA-AES and H.264 are optional
@@ -33,21 +33,31 @@ With the MinGW runtime directory on `PATH`, run both native integration suites
 from PowerShell:
 
 ```powershell
-python tests/integration/unified_panel.py --viewer build-windows/vncviewer/vncviewer.exe
-python tests/integration/dashboard.py --viewer build-windows/vncviewer/vncviewer.exe
+python tests/integration/unified_panel.py --viewer build/vncviewer/vncviewer.exe
+python tests/integration/dashboard.py --viewer build/vncviewer/vncviewer.exe
 ```
 
 In PowerShell, from the repository root, create a portable ZIP:
 
 ```powershell
-.\contrib\unified\package-windows.ps1 -BuildDir build-windows `
+.\contrib\unified\package-windows.ps1 -BuildDir build `
   -RuntimeBin C:\msys64\mingw64\bin
 ```
 
-For a repeat package, supply a fresh `-OutputDir`. The script includes all
-transitive MinGW DLL dependencies and the library license notices. It creates
-`dist/SuperSmartClient-windows-x64.zip` and its SHA-256 checksum. The program is
-not code-signed.
+Use `build/` as the only build directory in this checkout. Reuse the existing
+cache for subsequent builds. Windows and Linux need separate toolchains; use
+CI for the other platform, or clean `build/` before switching toolchains. Do not
+rename a configured CMake tree. Keep logs and temporary diagnostics in `build/`.
+
+The script includes all transitive MinGW DLL dependencies and library license
+notices. It creates `dist/workspaces/SuperSmartClient-windows-x64.zip`, its
+SHA-256 checksum, and the extracted package beside it. For a repeat package,
+close the packaged app and add `-Replace` to the same command. Do not create a
+fresh output directory for each change. The program is not code-signed.
+
+If the app is running, use `-ZipOnly -Replace`. This stages files under
+`build/package/` and refreshes the same ZIP without replacing the running
+executable. Close the app before extracting that ZIP over its existing folder.
 
 ## Linux (Ubuntu)
 
@@ -59,17 +69,17 @@ sudo apt-get install build-essential cmake ninja-build pkg-config \
   libxrandr-dev libxtst-dev libxi-dev libxinerama-dev libxcursor-dev \
   libxft-dev libpng-dev xvfb xauth xdotool openssl libsqlite3-dev \
   libsecret-1-dev libsecret-tools gnome-keyring dbus-x11
-cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
   -DENABLE_H264=OFF -DENABLE_WAYLAND=OFF -DENABLE_NLS=OFF
-cmake --build build-linux --target vncviewer unifiedpanel dashboardmodel --parallel
-ctest --test-dir build-linux/tests/unit -R UnifiedPanel --output-on-failure
+cmake --build build --target vncviewer unifiedpanel dashboardmodel --parallel
+ctest --test-dir build/tests/unit -R UnifiedPanel --output-on-failure
 xvfb-run -a python3 tests/integration/unified_panel.py \
-  --viewer build-linux/vncviewer/vncviewer --input-tests
-bash tests/integration/isolated-keyring.sh ctest --test-dir build-linux/tests/unit \
+  --viewer build/vncviewer/vncviewer --input-tests
+bash tests/integration/isolated-keyring.sh ctest --test-dir build/tests/unit \
   -R DashboardModel --output-on-failure
 bash tests/integration/isolated-keyring.sh xvfb-run -a -s '-screen 0 1600x1000x24' \
-  python3 tests/integration/dashboard.py --viewer build-linux/vncviewer/vncviewer --input-tests
+  python3 tests/integration/dashboard.py --viewer build/vncviewer/vncviewer --input-tests
 ```
 
 The integration tests start a local server on an ephemeral loopback port and
@@ -95,6 +105,6 @@ persist passwords. A working desktop keyring is required at runtime.
 To run the complete upstream unit suite, build all the test targets first:
 
 ```sh
-cmake --build build-linux --parallel
-ctest --test-dir build-linux/tests/unit --output-on-failure
+cmake --build build --parallel
+ctest --test-dir build/tests/unit --output-on-failure
 ```

@@ -14,9 +14,8 @@ cmake_install.cmake
 cmake_uninstall.cmake
 install_manifest.txt
 
-# Local builds and downloaded toolchains
+# One local build tree, the installed toolchain, and current portable package
 /.tools/
-/build*/
-/build*.log
+/build/
 /dist/
 __pycache__/

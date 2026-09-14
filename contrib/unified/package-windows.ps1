@@ -1,7 +1,9 @@
 param(
-    [Parameter(Mandatory = $true)][string]$BuildDir,
+    [string]$BuildDir = 'build',
     [Parameter(Mandatory = $true)][string]$RuntimeBin,
-    [string]$OutputDir = 'dist'
+    [string]$OutputDir = 'dist/workspaces',
+    [switch]$Replace,
+    [switch]$ZipOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,9 +18,35 @@ if (!(Test-Path -LiteralPath $viewer) -or !(Test-Path -LiteralPath $objdump)) {
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $outputRoot = (Resolve-Path -LiteralPath $OutputDir).Path
-$package = Join-Path $outputRoot 'SuperSmartClient-windows-x64'
+$packageRoot = $outputRoot
+if ($ZipOnly) {
+    $packageRoot = Join-Path $buildRoot 'package'
+    New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+    $packageRoot = (Resolve-Path -LiteralPath $packageRoot).Path
+    if (!$packageRoot.StartsWith($buildRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        ((Get-Item -LiteralPath $packageRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'ZIP staging must remain inside the build directory.'
+    }
+}
+$package = Join-Path $packageRoot 'SuperSmartClient-windows-x64'
 if (Test-Path -LiteralPath $package) {
-    throw "Package directory already exists. Choose a fresh OutputDir: $package"
+    if (!$Replace) { throw "Package already exists. Close the app and use -Replace to refresh this same directory: $package" }
+    $resolvedPackage = (Resolve-Path -LiteralPath $package).Path
+    $expectedPackage = [IO.Path]::GetFullPath((Join-Path $packageRoot 'SuperSmartClient-windows-x64'))
+    if ($resolvedPackage -ne $expectedPackage -or
+        ((Get-Item -LiteralPath $resolvedPackage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Refusing to replace a package outside the expected output directory or through a directory link.'
+    }
+    $sourceFile = Join-Path $resolvedPackage 'SOURCE.txt'
+    if (!(Test-Path -LiteralPath $sourceFile) -or
+        !(Select-String -LiteralPath $sourceFile -SimpleMatch -Quiet 'SuperSmartClient source: https://github.com/bendikme/SuperSmartClient')) {
+        throw 'Refusing to replace a directory that is not a generated SuperSmartClient package.'
+    }
+    $running = Get-CimInstance Win32_Process | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($resolvedPackage + '\', [StringComparison]::OrdinalIgnoreCase)
+    }
+    if ($running) { throw "The packaged app is running. Close it before replacing $resolvedPackage" }
+    Remove-Item -LiteralPath $resolvedPackage -Recurse -Force
 }
 New-Item -ItemType Directory -Path $package | Out-Null
 Copy-Item -LiteralPath $viewer -Destination (Join-Path $package 'SuperSmartClient.exe')
@@ -79,7 +107,7 @@ if (Test-Path -LiteralPath $pacman) {
     if ($LASTEXITCODE -ne 0) { throw 'Cannot record build dependencies.' }
 }
 $zip = Join-Path $outputRoot 'SuperSmartClient-windows-x64.zip'
-Compress-Archive -LiteralPath $package -DestinationPath $zip
+Compress-Archive -LiteralPath $package -DestinationPath $zip -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $zip |
     ForEach-Object { "$($_.Hash.ToLower())  SuperSmartClient-windows-x64.zip" } |
     Set-Content -LiteralPath "$zip.sha256" -Encoding ASCII

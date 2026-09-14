@@ -469,6 +469,49 @@ class DashboardTests(unittest.TestCase):
                     return db.execute("SELECT count(*) FROM layouts WHERE name='Saved copy'").fetchone()[0] == 1
             wait_for(copied, "Layout menu did not save a named copy")
 
+    def test_moved_window_menu_anchor_round_buttons_and_dark_fields(self):
+        self.require_input()
+        create_database(self.db, [("Appearance fixture", [])])
+        with self.viewer():
+            window = self.window()
+            self.xdo("windowmove", window, 120, 100)
+            self.click(window, 1250, 80)  # Dark theme, on our isolated empty dashboard.
+            def picture(target, suffix):
+                path = str(SCREENSHOT) + suffix if SCREENSHOT else str(self.case_dir / (suffix + ".png"))
+                return capture_window(target, path)
+            def pixel(picture, x, y):
+                width, height, raw, stride = picture
+                self.assertTrue(0 <= x < width and 0 <= y < height)
+                offset = y * stride + x * 4
+                return tuple(raw[offset + channel] for channel in (2, 1, 0))
+            time.sleep(0.15)
+            dark = picture(window, ".dark.png")
+            self.assertEqual(pixel(dark, 500, 20), (30, 41, 59), "Layout field is not dark")
+            self.assertEqual(pixel(dark, 240, 70), (30, 41, 59), "Arrangement field is not dark")
+            self.assertEqual(pixel(dark, 1199, 14), (19, 33, 53), "Button corner is square")
+            self.assertEqual(pixel(dark, 1220, 16), (37, 99, 235), "Primary button fill is wrong")
+            visible = root_windows()
+            self.click(window, 615, 29)
+            popups = root_windows() - visible
+            def geometry(target):
+                return dict(line.split("=", 1) for line in self.xdo("getwindowgeometry", "--shell", target).splitlines())
+            menu = next(target for target in popups if int(geometry(target)["HEIGHT"]) > 100)
+            parent_bounds, menu_bounds = geometry(window), geometry(menu)
+            self.assertAlmostEqual(int(menu_bounds["X"]), int(parent_bounds["X"]) + 572, delta=3)
+            self.assertAlmostEqual(int(menu_bounds["Y"]), int(parent_bounds["Y"]) + 45, delta=3)
+            popup = picture(menu, ".menu.png")
+            self.assertLess(max(pixel(popup, 3, 3)), 100, "Dark popup has a light background")
+            self.xdo("key", "Escape")
+            self.click(window, 1250, 29)
+            editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
+                              "--name", "Add panel - SuperSmartClient").splitlines()[0]
+            time.sleep(0.1)
+            form = picture(editor, ".dark-editor.png")
+            self.assertEqual(pixel(form, 10, 10), (17, 24, 39), "Dialog did not inherit dark mode")
+            self.assertEqual(pixel(form, 40, 100), (30, 41, 59), "Text input has a light background")
+            self.assertEqual(pixel(form, 100, 244), (30, 41, 59), "Dialog dropdown has a light background")
+            self.click(editor, 75, 500)  # Cancel.
+
     def test_presets_reorder_into_fixed_slots_without_remote_input(self):
         self.require_input()
         servers = [self.server() for _ in range(3)]
@@ -550,6 +593,30 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(second.inputs, [])
 
 
+def root_windows():
+    # Menus can have no title or PID property. Query the isolated Xvfb root
+    # directly so the appearance test also sees those transient windows.
+    import ctypes.util
+    x = ctypes.CDLL(ctypes.util.find_library("X11"))
+    x.XOpenDisplay.restype = ctypes.c_void_p
+    display = x.XOpenDisplay(None)
+    x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x.XDefaultRootWindow.restype = ctypes.c_ulong
+    root, parent, count = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_uint()
+    children = ctypes.POINTER(ctypes.c_ulong)()
+    x.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_void_p] * 4
+    x.XFree.argtypes = [ctypes.c_void_p]
+    x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    try:
+        assert x.XQueryTree(display, x.XDefaultRootWindow(display), ctypes.byref(root), ctypes.byref(parent),
+                            ctypes.byref(children), ctypes.byref(count))
+        return {str(children[index]) for index in range(count.value)}
+    finally:
+        if children:
+            x.XFree(children)
+        x.XCloseDisplay(display)
+
+
 def capture_window(window, path):
     # Read pixels from the isolated test display. This sends no input events.
     import ctypes.util
@@ -588,7 +655,9 @@ def capture_window(window, path):
         png += chunk(b"IDAT", zlib.compress(bytes(rows))) + chunk(b"IEND", b"")
         Path(path).write_bytes(png)
         x.XDestroyImage.argtypes = [ctypes.POINTER(XImage)]
+        stride = picture.contents.bytes_per_line
         x.XDestroyImage(picture)
+        return width.value, height.value, raw, stride
     finally:
         x.XCloseDisplay.argtypes = [ctypes.c_void_p]
         x.XCloseDisplay(display)
