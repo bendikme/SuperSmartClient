@@ -84,7 +84,6 @@ CConn::CConn()
 {
   setShared(::shared);
   setSiemensTLS(unifiedPanel && unifiedSecurity == "Certificate");
-  setInputEnabled(!unifiedPanel);
 
   supportsLocalCursor = true;
   supportsCursorPosition = true;

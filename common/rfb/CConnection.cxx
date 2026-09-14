@@ -68,7 +68,7 @@ CConnection::CConnection()
   : csecurity(nullptr),
     supportsLocalCursor(false), supportsCursorPosition(false),
     supportsDesktopResize(false), supportsLEDState(false),
-    siemensTLS(nullptr), siemensTLSEnabled(false), inputEnabled(true),
+    siemensTLS(nullptr), siemensTLSEnabled(false),
     is(nullptr), os(nullptr), reader_(nullptr), writer_(nullptr),
     shared(false),
     state_(RFBSTATE_UNINITIALISED),
@@ -105,13 +105,6 @@ void CConnection::setSiemensTLS(bool enabled)
   if (state_ != RFBSTATE_UNINITIALISED)
     throw std::logic_error("Cannot change TLS mode after connection starts");
   siemensTLSEnabled = enabled;
-}
-
-void CConnection::setInputEnabled(bool enabled)
-{
-  if (state_ != RFBSTATE_UNINITIALISED)
-    throw std::logic_error("Cannot change input policy after connection starts");
-  inputEnabled = enabled;
 }
 
 void CConnection::setFramebuffer(ModifiablePixelBuffer* fb)
@@ -451,7 +444,7 @@ void CConnection::securityCompleted()
 {
   state_ = RFBSTATE_INITIALISATION;
   reader_ = new CMsgReader(this, is);
-  writer_ = new CMsgWriter(&server, os, inputEnabled);
+  writer_ = new CMsgWriter(&server, os);
   vlog.debug("Authentication success!");
   writer_->writeClientInit(shared);
 }

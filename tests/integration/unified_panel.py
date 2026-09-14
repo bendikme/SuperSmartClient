@@ -15,11 +15,13 @@ import ssl
 import struct
 import subprocess
 import tempfile
+import time
 import unittest
 
 
 VIEWER = None
 OPENSSL = "openssl"
+INPUT_TESTS = False
 PASSWORD = "Test123!"
 CHALLENGE = bytes(range(16))
 
@@ -58,7 +60,7 @@ class UnifiedPanelTests(unittest.TestCase):
         cls.temp.cleanup()
 
     @contextlib.contextmanager
-    def viewer(self, *options, config=None, cancel_after=False):
+    def viewer(self, *options, config=None, cancel_after=False, view_only=True):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen(1)
@@ -75,10 +77,12 @@ class UnifiedPanelTests(unittest.TestCase):
             else:
                 command.extend(["-UnifiedPanel=1", f"127.0.0.1::{port}"])
             command.extend([
-                "-ViewOnly=1", "-AlertOnFatalError=0",
+                "-AlertOnFatalError=0",
                 "-ReconnectOnError=0", "-X509CA", str(self.cert),
-                *options,
             ])
+            if view_only is not None:
+                command.append(f"-ViewOnly={int(view_only)}")
+            command.extend(options)
             # Isolate Linux viewer settings and certificate trust from the user.
             env = {**os.environ, "VNC_PASSWORD": PASSWORD,
                    "XDG_CONFIG_HOME": str(self.directory / "config"),
@@ -91,6 +95,7 @@ class UnifiedPanelTests(unittest.TestCase):
             with tempfile.TemporaryFile() as log:
                 process = subprocess.Popen(command, env=env, stdout=log, stderr=log,
                                            startupinfo=startup)
+                self.viewer_pid = process.pid
                 try:
                     connection, _ = listener.accept()
                     with connection:
@@ -156,7 +161,7 @@ class UnifiedPanelTests(unittest.TestCase):
         return tls
 
     def session(self, connection, anonymous=False, siemens=False,
-                fragmented=False, version=None):
+                fragmented=False, version=None, input_enabled=None):
         if siemens:
             self.siemens_greeting(connection, fragmented)
         else:
@@ -220,6 +225,85 @@ class UnifiedPanelTests(unittest.TestCase):
                     self.fail(f"Unexpected client message after framebuffer: {message}")
             else:
                 self.fail("Viewer did not consume the framebuffer")
+            if input_enabled is not None:
+                self.check_input(secure, input_enabled)
+
+    def require_input_tests(self):
+        if not INPUT_TESTS:
+            self.skipTest("Use --input-tests under xvfb-run to test local input")
+        # Input tests must never run on a user's desktop or a remote display.
+        # xvfb-run uses :N and a local lock file containing the Xvfb PID.
+        display = os.environ.get("DISPLAY", "")
+        self.assertTrue(display.startswith(":"), "Input tests require local Xvfb")
+        number = display[1:].split(".")[0]
+        self.assertTrue(number.isdigit(), "Input tests require local Xvfb")
+        pid = Path(f"/tmp/.X{number}-lock").read_text().strip()
+        self.assertTrue(pid.isdigit())
+        self.assertEqual(Path(f"/proc/{pid}/comm").read_text().strip(), "Xvfb")
+
+    def check_input(self, secure, enabled):
+        def xdo(*args):
+            return subprocess.run(["xdotool", *map(str, args)], check=True,
+                                  capture_output=True, text=True, timeout=5).stdout.strip()
+
+        # Target only the child viewer connected to this loopback fixture.
+        window = xdo("search", "--sync", "--onlyvisible", "--pid", self.viewer_pid,
+                     "--name", "Unified panel fixture").splitlines()[0]
+        self.assertEqual(int(xdo("getwindowpid", window)), self.viewer_pid)
+        xdo("windowfocus", "--sync", window)
+        xdo("mousemove", "--window", window, 20, 20)
+        xdo("click", "--window", window, 1)
+        xdo("key", "--window", window, "a")
+
+        keys, buttons = [], []
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            secure.settimeout(max(0.01, deadline - time.monotonic()))
+            try:
+                message = receive(secure, 1)[0]
+            except TimeoutError:
+                break
+            if message == 4:
+                data = receive(secure, 7)
+                keys.append((data[0], struct.unpack("!I", data[3:])[0]))
+            elif message == 5:
+                buttons.append(receive(secure, 5)[0])
+            elif message == 0:
+                receive(secure, 19)
+            elif message == 2:
+                count = struct.unpack("!H", receive(secure, 3)[1:])[0]
+                receive(secure, count * 4)
+            elif message == 3:
+                receive(secure, 9)
+            else:
+                self.fail(f"Unexpected client message during input test: {message}")
+        if enabled:
+            self.assertIn((1, ord("a")), keys, "TLS control mode dropped key press")
+            self.assertIn((0, ord("a")), keys, "TLS control mode dropped key release")
+            self.assertIn(1, buttons, "TLS control mode dropped mouse press")
+            self.assertIn(0, buttons[buttons.index(1) + 1:], "Mouse release missing")
+        else:
+            self.assertEqual(keys, [], "Monitor only sent keyboard input")
+            self.assertEqual(buttons, [], "Monitor only sent mouse input")
+
+    def test_tls_control_mode_sends_mouse_and_keyboard(self):
+        self.require_input_tests()
+        for siemens, anonymous in ((True, False), (False, False), (False, True)):
+            mode = "AnonymousTLS" if anonymous else "Certificate"
+            with self.subTest(siemens=siemens, mode=mode):
+                with self.viewer("-ViewOnly=0", f"-UnifiedSecurity={mode}") as connection:
+                    self.session(connection, siemens=siemens, anonymous=anonymous,
+                                 input_enabled=True)
+
+    def test_tls_saved_monitor_mode_suppresses_mouse_and_keyboard(self):
+        self.require_input_tests()
+        for siemens, anonymous in ((True, False), (False, False), (False, True)):
+            mode = "AnonymousTLS" if anonymous else "Certificate"
+            with self.subTest(siemens=siemens, mode=mode):
+                config = f"UnifiedPanel=1\nUnifiedSecurity={mode}\nViewOnly=1\n"
+                with self.viewer(config=config, view_only=None) as connection:
+                    self.session(connection, siemens=siemens, anonymous=anonymous,
+                                 input_enabled=False)
 
     def test_certificate_tls_password_and_framebuffer(self):
         with self.viewer() as connection:
@@ -370,7 +454,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--viewer", required=True, help="Path to the built native viewer")
     parser.add_argument("--openssl", default="openssl", help="OpenSSL executable (default: PATH)")
+    parser.add_argument("--input-tests", action="store_true",
+                        help="Exercise control/monitor modes on Linux inside Xvfb (requires xdotool)")
     args, remaining = parser.parse_known_args()
     VIEWER = str(Path(args.viewer).resolve())
     OPENSSL = args.openssl
+    INPUT_TESTS = args.input_tests
     unittest.main(argv=[__file__, *remaining], verbosity=2)

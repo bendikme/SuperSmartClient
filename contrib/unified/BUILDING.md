@@ -45,14 +45,14 @@ sudo apt-get install build-essential cmake ninja-build pkg-config \
   libfltk1.3-dev libgnutls28-dev libjpeg-turbo8-dev libpixman-1-dev \
   zlib1g-dev libgtest-dev libpam0g-dev libxdamage-dev libxfixes-dev \
   libxrandr-dev libxtst-dev libxi-dev libxinerama-dev libxcursor-dev \
-  libxft-dev libpng-dev xvfb xauth openssl
+  libxft-dev libpng-dev xvfb xauth xdotool openssl
 cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
   -DENABLE_H264=OFF -DENABLE_WAYLAND=OFF -DENABLE_NLS=OFF
 cmake --build build-linux --target vncviewer unifiedpanel --parallel
 ctest --test-dir build-linux/tests/unit -R UnifiedPanel --output-on-failure
 xvfb-run -a python3 tests/integration/unified_panel.py \
-  --viewer build-linux/vncviewer/vncviewer
+  --viewer build-linux/vncviewer/vncviewer --input-tests
 ```
 
 The integration tests start a local server on an ephemeral loopback port and
@@ -63,8 +63,10 @@ They cover both the Siemens `VNC OVER SSL` transport (TLS before the client RFB
 reply) and VeNCrypt, fragmented greetings, certificate decisions, conflicting
 command-line/file settings, rejected plaintext/passwordless offers and ordinary
 VNC when the profile is disabled. All test connections use loopback addresses.
-Profile tests also verify that the protocol writer suppresses mouse and
-keyboard messages, including extended events, in monitor-only connections.
+Profile tests verify that encryption preserves the chosen input mode. Linux
+`--input-tests` require Xvfb and xdotool and send events only to the child
+viewer connected to the loopback fixture. They check mouse/key delivery in
+control mode and suppression in monitor mode for all three TLS transports.
 
 To run the complete upstream unit suite, build all the test targets first:
 

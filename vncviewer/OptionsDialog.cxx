@@ -367,7 +367,6 @@ void OptionsDialog::loadOptions(void)
 
   // These settings are fixed by the Unified panel connection profile.
   for (Fl_Widget* widget : {
-         (Fl_Widget*)viewOnlyCheckbox,
          (Fl_Widget*)sharedCheckbox, (Fl_Widget*)acceptClipboardCheckbox,
          (Fl_Widget*)sendClipboardCheckbox,
 #if !defined(WIN32) && !defined(__APPLE__)

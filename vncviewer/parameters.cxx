@@ -197,7 +197,7 @@ core::BoolParameter
 core::BoolParameter
   unifiedPanel("UnifiedPanel",
                "Use the Siemens Unified Comfort panel profile "
-               "(TLS, VNC password, monitor only, shared access, fixed panel size)",
+               "(TLS, VNC password, shared access, fixed panel size)",
                true);
 core::EnumParameter
   unifiedSecurity("UnifiedSecurity",
@@ -218,7 +218,6 @@ void applyUnifiedPanelProfile()
   rfb::SecurityClient::secTypes.setParam(
     unifiedSecurity == "AnonymousTLS" ? "TLSVnc" : "X509Vnc");
   shared.setParam(true);
-  viewOnly.setParam(true);
   remoteResize.setParam(false);
   desktopSize.setParam("");
   sendClipboard.setParam(false);

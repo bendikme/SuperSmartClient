@@ -7,7 +7,7 @@ VeNCrypt connections. Siemens lists
 TigerVNC as a compatible client in its
 [Unified Comfort Panels V20 manual](https://docs.tia.siemens.cloud/r/unified_comfort_panels_enus_20/operating-the-control-panel/network-and-internet/remote-connection).
 
-This fork adds a monitor-only panel profile and Siemens TLS negotiation to the
+This fork adds a panel connection profile and Siemens TLS negotiation to the
 native viewer, including the Windows application. It does not change the Java
 viewer or the VNC servers.
 It is an independent project, not a Siemens product.
@@ -26,8 +26,9 @@ headers, so the native Windows viewer builds with the current MSYS2 toolchain.
 3. Run `SuperSmartClient.exe`. Enter the panel IP address, or `hostname::port`,
    for example `192.168.0.10::5900`. IPv6 uses `[address]::port`.
 4. Select **Unified panel - certificate TLS** (the default).
-   **Monitor only** is enforced in the Unified profile: mouse and keyboard
-   messages are blocked in both the interface and the protocol writer.
+   Leave **Monitor only** unchecked for mouse and keyboard control, or check it
+   for viewing without control. This choice is independent of encryption and
+   works with both TLS modes. The panel must also grant remote-control rights.
 5. On first connection, verify the presented certificate with the panel's owner
    before accepting the exception. TigerVNC remembers accepted public keys and
    prompts if a key changes. Alternatively, configure a trusted certificate in
@@ -48,7 +49,7 @@ in these configuration files.
 | Shared access | Requests a shared session, so connecting does not request disconnection of other viewers |
 | Panel resolution | Disables remote resizing and clears desktop-size requests |
 | Clipboard | Disables clipboard exchange |
-| Input | Enforces `ViewOnly` and blocks all pointer and keyboard messages at the protocol writer, including extended events |
+| Input | Respects `ViewOnly`: unchecked allows control; checked suppresses mouse and keyboard input |
 
 The profile is applied after command-line or file settings, before each
 connection and reconnect. Its enforced settings are disabled in the Options
@@ -69,12 +70,15 @@ prompts; this fork does not bypass verification or enable obsolete TLS versions.
 
 ```powershell
 .\SuperSmartClient.exe -UnifiedPanel -ViewOnly 192.168.0.10::5900
+.\SuperSmartClient.exe -UnifiedPanel -ViewOnly=0 192.168.0.10::5900
 .\SuperSmartClient.exe -UnifiedPanel -X509CA C:/certificates/panel.pem panel.example
 .\SuperSmartClient.exe -UnifiedPanel -UnifiedSecurity=AnonymousTLS 192.168.0.10
 ```
 
-`ViewOnly=0` in a file or command line cannot enable input in the Unified
-profile. Standard VNC retains upstream behavior; it is not a panel control mode.
+`ViewOnly=0` enables control and `ViewOnly=1` enables monitoring in connection
+files or on the command line. You can also change this in **Options > Input**
+during a connection. Settings saved by an earlier build may still have
+`ViewOnly=1`; uncheck **Monitor only** or override it with `-ViewOnly=0`.
 
 ## Compatibility and verification
 
@@ -95,11 +99,13 @@ Automated tests exercise the real Windows and Linux viewers against loopback
 Siemens TLS and VeNCrypt servers. They cover TLS 1.2/1.3, fragmented greetings,
 certificate decisions, password authentication, framebuffer delivery and
 rejection of invalid greetings, plaintext/passwordless offers and TLS failures.
-Unit tests verify the monitor-only policy and suppression of standard and
-extended mouse/keyboard messages while allowing display updates.
+Unit tests verify that both TLS modes preserve the selected input mode.
+Additional Linux tests send mouse/key events only to a fixture viewer inside
+an isolated Xvfb display. They verify encrypted control input is delivered and
+monitor-only input is suppressed for Siemens TLS and both VeNCrypt TLS modes.
 
-Local validation: 20 simulated connection tests on each platform, 8 Windows
-profile/input tests, and 275 Linux unit tests. A separate build without GnuTLS
+Local validation includes simulated connections on both platforms, profile
+unit tests and the Linux input tests. A separate build without GnuTLS
 checks that the Unified profile fails closed while ordinary VNC remains
 available.
 

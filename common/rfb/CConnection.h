@@ -92,10 +92,6 @@ namespace rfb {
     void setSiemensTLS(bool enabled);
     bool usesSiemensTLS() const { return siemensTLS != nullptr; }
 
-    // Disable all mouse and keyboard messages at the protocol writer.
-    // Set before initialiseProtocol(); fixed for the life of the connection.
-    void setInputEnabled(bool enabled);
-
     // setFramebuffer configures the PixelBuffer that the CConnection
     // should render all pixel data in to. Note that the CConnection
     // takes ownership of the PixelBuffer and it must not be deleted by
@@ -329,7 +325,6 @@ namespace rfb {
 
     CSecurity* siemensTLS;
     bool siemensTLSEnabled;
-    bool inputEnabled;
 
     rdr::InStream* is;
     rdr::OutStream* os;

@@ -22,7 +22,7 @@ jobs:
             libfltk1.3-dev libgnutls28-dev libjpeg-turbo8-dev libpixman-1-dev \
             zlib1g-dev libgtest-dev libpam0g-dev libxdamage-dev libxfixes-dev \
             libxrandr-dev libxtst-dev libxi-dev libxinerama-dev libxcursor-dev \
-            libxft-dev libpng-dev xvfb xauth openssl
+            libxft-dev libpng-dev xvfb xauth xdotool openssl
       - name: Build
         run: |
           cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -33,7 +33,7 @@ jobs:
         run: |
           ctest --test-dir build-linux/tests/unit -R UnifiedPanel --output-on-failure
           xvfb-run -a python3 tests/integration/unified_panel.py \
-            --viewer build-linux/vncviewer/vncviewer
+            --viewer build-linux/vncviewer/vncviewer --input-tests
 
   windows:
     runs-on: windows-latest

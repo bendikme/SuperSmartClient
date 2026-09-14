@@ -160,11 +160,7 @@ void ServerDialog::loadProfile()
 {
   profileChoice->value(!unifiedPanel ? 0 :
                         unifiedSecurity == "AnonymousTLS" ? 2 : 1);
-  monitorCheckbox->value(unifiedPanel || viewOnly);
-  if (unifiedPanel)
-    monitorCheckbox->deactivate();
-  else
-    monitorCheckbox->activate();
+  monitorCheckbox->value(viewOnly);
 }
 
 void ServerDialog::handleOptionsChanged(void* data)
@@ -178,7 +174,7 @@ void ServerDialog::handleProfile(Fl_Widget*, void* data)
   unifiedPanel.setParam(dialog->profileChoice->value() != 0);
   unifiedSecurity.setParam(dialog->profileChoice->value() == 2 ?
                              "AnonymousTLS" : "Certificate");
-  viewOnly.setParam(unifiedPanel || dialog->monitorCheckbox->value());
+  viewOnly.setParam(dialog->monitorCheckbox->value());
   dialog->loadProfile();
 }
 

@@ -7,10 +7,6 @@
 #endif
 
 #include <gtest/gtest.h>
-#include <core/Rect.h>
-#include <rdr/MemOutStream.h>
-#include <rfb/CMsgWriter.h>
-#include <rfb/ServerParams.h>
 #include <rfb/SecurityClient.h>
 #include "parameters.h"
 
@@ -83,14 +79,17 @@ TEST_F(UnifiedPanel, PreventsResizeClipboardAndExclusiveConnections)
 #endif
 }
 
-TEST_F(UnifiedPanel, EnforcesMonitorOnlyDespiteConflictingSettings)
+TEST_F(UnifiedPanel, TLSModesPreserveMonitorAndControlChoices)
 {
-  viewOnly.setParam(true);
-  applyUnifiedPanelProfile();
-  EXPECT_TRUE(viewOnly);
-  viewOnly.setParam(false);
-  applyUnifiedPanelProfile();
-  EXPECT_TRUE(viewOnly);
+  for (const char* mode : {"Certificate", "AnonymousTLS"}) {
+    unifiedSecurity.setParam(mode);
+    viewOnly.setParam(true);
+    applyUnifiedPanelProfile();
+    EXPECT_TRUE(viewOnly);
+    viewOnly.setParam(false);
+    applyUnifiedPanelProfile();
+    EXPECT_FALSE(viewOnly);
+  }
 }
 
 TEST_F(UnifiedPanel, ReappliesPolicyAfterConflictingSettings)
@@ -114,40 +113,3 @@ TEST_F(UnifiedPanel, RefusesBuildsWithoutTLS)
   EXPECT_THROW(applyUnifiedPanelProfile(), std::runtime_error);
 }
 #endif
-
-TEST(UnifiedPanelInput, BlocksMouseAndKeyboardAtTheProtocolWriter)
-{
-  rfb::ServerParams server;
-  server.setDimensions(64, 48);
-  rdr::MemOutStream output;
-  rfb::CMsgWriter writer(&server, &output, false);
-
-  for (bool extended : {false, true}) {
-    server.supportsQEMUKeyEvent = extended;
-    server.supportsExtendedMouseButtons = extended;
-    writer.writeKeyEvent('a', 0x1e, true);
-    writer.writeKeyEvent('a', 0x1e, false);
-    writer.writePointerEvent(core::Point(12, 24), 0); // Motion
-    writer.writePointerEvent(core::Point(12, 24), 1); // Button press
-    writer.writePointerEvent(core::Point(12, 24), 8); // Scroll wheel
-    writer.writePointerEvent(core::Point(12, 24), 128); // Extended button
-  }
-  EXPECT_EQ(output.length(), 0u);
-
-  writer.writeFramebufferUpdateRequest(core::Rect(0, 0, 64, 48), true);
-  ASSERT_EQ(output.length(), 10u);
-  EXPECT_EQ(output.data()[0], 3); // Display updates remain available.
-}
-
-TEST(UnifiedPanelInput, StandardWriterStillSupportsInput)
-{
-  rfb::ServerParams server;
-  server.setDimensions(64, 48);
-  rdr::MemOutStream output;
-  rfb::CMsgWriter writer(&server, &output);
-  writer.writeKeyEvent('a', 0, true);
-  writer.writePointerEvent(core::Point(12, 24), 1);
-  const uint8_t expected[] = {4, 1, 0, 0, 0, 0, 0, 'a', 5, 1, 0, 12, 0, 24};
-  ASSERT_EQ(output.length(), sizeof(expected));
-  EXPECT_EQ(memcmp(output.data(), expected, sizeof(expected)), 0);
-}
