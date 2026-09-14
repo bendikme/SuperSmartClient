@@ -38,8 +38,23 @@ $plan = foreach ($relative in $targets) {
     }
     $resolved
 }
+$failed = @()
 foreach ($target in $plan) {
     if ($PSCmdlet.ShouldProcess($target, 'Remove generated files')) {
-        Remove-Item -LiteralPath $target -Recurse -Force
+        # An open directory handle must not prevent unrelated targets or
+        # unlocked siblings from being cleaned. Report all leftovers afterward.
+        $removalErrors = @()
+        try {
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable removalErrors
+        } catch {
+            $removalErrors += $_
+        }
+        if ($removalErrors.Count -gt 0) {
+            $failed += $target
+            Write-Warning "Could not fully remove ${target}: $($removalErrors[0].Exception.Message)"
+        }
     }
+}
+if ($failed.Count -gt 0) {
+    throw "Cleanup finished with $($failed.Count) target(s) still present. Close programs holding the reported paths and run this script again."
 }
