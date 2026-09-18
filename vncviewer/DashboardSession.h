@@ -25,6 +25,8 @@ public:
   void key(bool down, int code, unsigned keysym);
   void releaseInput();
   void refresh();
+  // Application-wide: answer certificate trust prompts with "yes" unasked.
+  static void acceptUnknownCertificates(bool value);
 
   State status() const { return status_; }
   bool live() const { return status_ == State::Live; }

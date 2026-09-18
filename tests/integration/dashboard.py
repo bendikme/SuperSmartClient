@@ -83,7 +83,7 @@ def workspace(profiles):
     return output
 
 
-def create_database(path, layouts):
+def create_database(path, layouts, accept_certificates=False):
     with contextlib.closing(sqlite3.connect(path)) as db:
         db.executescript("PRAGMA user_version=1; PRAGMA application_id=1397965636;"
                          "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
@@ -92,6 +92,8 @@ def create_database(path, layouts):
         for number, (name, profiles) in enumerate(layouts):
             db.execute("INSERT INTO layouts VALUES (?,?,?,?)", (str(number), name, workspace(profiles), number))
         db.execute("INSERT INTO metadata VALUES ('active','0')")
+        if accept_certificates:
+            db.execute("INSERT INTO metadata VALUES ('acceptUnknownCertificates','1')")
         db.commit()
 
 
@@ -283,8 +285,8 @@ class DashboardTests(unittest.TestCase):
         return server
 
     @contextlib.contextmanager
-    def viewer(self):
-        env = {**os.environ, "XDG_CONFIG_HOME": str(self.case_dir / "config"),
+    def viewer(self, trusted=True):
+        env ={**os.environ, "XDG_CONFIG_HOME": str(self.case_dir / "config"),
                "XDG_STATE_HOME": str(self.case_dir / "state")}
         env.pop("VNC_PASSWORD", None)
         startup = None
@@ -293,7 +295,8 @@ class DashboardTests(unittest.TestCase):
             startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startup.wShowWindow = subprocess.SW_HIDE
         with tempfile.TemporaryFile() as log:
-            process = subprocess.Popen([VIEWER, "-DashboardConfig", str(self.db), "-CheckUpdates=0", "-X509CA", str(self.cert)],
+            trust = ["-X509CA", str(self.cert)] if trusted else []
+            process = subprocess.Popen([VIEWER, "-DashboardConfig", str(self.db), "-CheckUpdates=0", *trust],
                                        env=env, stdout=log, stderr=log, startupinfo=startup)
             self.process = process
             try:
@@ -325,6 +328,17 @@ class DashboardTests(unittest.TestCase):
         with self.viewer():
             wait_for(lambda: first.authentications == 3 and second.authentications == 2,
                      "Saved passwords were not restored after app restart")
+
+    def test_accept_unknown_certificates_setting_connects_without_a_prompt(self):
+        if os.name == "nt":
+            self.skipTest("The Windows known-hosts store cannot be isolated from the user's profile")
+        server = self.server()
+        create_database(self.db, [("Untrusted", [panel_profile(server, "Self-signed")])], accept_certificates=True)
+        # Without the fixture CA the certificate prompt would block streaming.
+        with self.viewer(trusted=False):
+            wait_for(lambda: server.frames > 2, "Unknown certificate was not accepted automatically")
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("SELECT value FROM metadata WHERE key='acceptUnknownCertificates'").fetchone()[0], "1")
 
     def test_password_rejection_pauses_reconnect(self):
         server = self.server(reject=True)
@@ -601,7 +615,7 @@ class DashboardTests(unittest.TestCase):
             self.click(window, 1298, 20)
             self.xdo("key", "Down", "Down", "Down", "Down", "Return")
             self.click(window, 1298, 20)
-            self.xdo("key", *(["Down"] * 9), "Return")
+            self.xdo("key", *(["Down"] * 10), "Return")
             dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
                               "--name", "SuperSmartClient updates").splitlines()[0]
             picture = self.picture(dialog, ".updates.png")

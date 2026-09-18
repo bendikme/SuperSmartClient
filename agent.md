@@ -56,7 +56,9 @@
 
 - Siemens certificate TLS starts immediately after the `VNC OVER SSL` greeting,
   before the client RFB version reply. Preserve this handshake and certificate
-  verification, plus standard VNC and anonymous TLS support.
+  verification, plus standard VNC and anonymous TLS support. The dashboard's
+  **Accept unknown certificates** setting is opt-in, stored only in the local
+  database and never exported; it answers trust prompts, not the handshake.
 - Encryption and Control/Monitor are independent per-panel settings. Keep
   connections, passwords, reconnect state and input focus isolated by panel.
 - Preserve compact multi-panel layouts, named layout selection, automatic

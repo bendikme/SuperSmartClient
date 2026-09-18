@@ -46,7 +46,10 @@ const SocketHandle invalidSocket = -1;
 void closeSocket(SocketHandle fd) { ::close(fd); }
 int socketError() { return errno; }
 #endif
+bool acceptCertificates = false;
 }
+
+void Session::acceptUnknownCertificates(bool value) { acceptCertificates = value; }
 
 struct Session::Connector {
   std::atomic<bool> cancelled{false};
@@ -170,6 +173,9 @@ protected:
 
   bool showMsgBox(rfb::MsgBoxFlags flags, const char* title, const char* text) override
   {
+    // Dashboard sessions only enable TLS and VNC password security, so every
+    // yes/no prompt is a certificate trust decision from CSecurityTLS.
+    if (acceptCertificates && flags == rfb::MsgBoxFlags::M_YESNO) return true;
     UserDialog dialog;
     std::string caption = owner_.panel_.name + " - " + title;
     bool accepted = dialog.showMsgBox(flags, caption.c_str(), text);

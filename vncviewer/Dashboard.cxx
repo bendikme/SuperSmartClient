@@ -162,6 +162,25 @@ private:
   bool hover_ = false;
 };
 
+// The popup geometry FLTK 1.3 will use for these items, which it does not expose.
+struct MenuSize { int width, height, itemHeight, selected, border; };
+MenuSize measureMenu(const Fl_Menu_Item* items, const Fl_Menu_* owner, const Fl_Menu_Item* current = nullptr) {
+  const int leading = 4;
+  MenuSize size{0, 0, 1, 0, 0};
+  int count = 0;
+  for (const Fl_Menu_Item* item = items->first(); item && item->text; item = item->next(), ++count) {
+    int height, width = item->measure(&height, owner);
+    size.itemHeight = std::max(size.itemHeight, height + leading);
+    size.width = std::max(size.width, width);
+    if (item == current) size.selected = count;
+  }
+  Fl_Boxtype frame = owner->box() == FL_NO_BOX || owner->box() == FL_FLAT_BOX ? FL_UP_BOX : owner->box();
+  size.border = Fl::box_dx(frame);
+  size.width += 2 * size.border + 7;
+  size.height = (count ? size.itemHeight * count - leading : 0) + 2 * size.border + 3;
+  return size;
+}
+
 class Choice : public Fl_Choice {
 public:
   using Fl_Choice::Fl_Choice;
@@ -182,7 +201,46 @@ public:
     fl_line(right - 4, middle - 2, right, middle + 2, right + 4, middle - 2);
     draw_label();
   }
+  int handle(int event) override {
+    bool open = event == FL_PUSH ||
+      (event == FL_KEYBOARD && Fl::event_key() == ' ' &&
+       !(Fl::event_state() & (FL_SHIFT | FL_CTRL | FL_ALT | FL_META))) ||
+      (event == FL_SHORTCUT && Fl_Widget::test_shortcut());
+    if (!open || !menu() || !menu()->text) return Fl_Choice::handle(event);
+    if (event == FL_PUSH && Fl::visible_focus()) Fl::focus(this);
+    dropdown();
+    return 1;
+  }
 private:
+  // FLTK opens the list with the current item over the field and never keeps
+  // that placement on screen, so a field near a screen edge gets a list that
+  // starts outside it and scrolls back. Open below the field, or above it when
+  // there is no room, and keep the current item highlighted for the keyboard.
+  void dropdown() {
+    const Fl_Menu_Item* current = mvalue();
+    int top = y();
+    if (current) {
+      MenuSize size = measureMenu(menu(), this, current);
+      int originX = 0, origin = 0;
+      for (Fl_Window* parent = window(); parent; parent = parent->window()) {
+        originX += parent->x(); origin += parent->y();
+      }
+      int screenX, screenY, screenW, screenH;
+      Fl::screen_work_area(screenX, screenY, screenW, screenH, originX + x(), origin + y());
+      int wanted = origin + y() + h();
+      if (wanted + size.height > screenY + screenH) {
+        int above = origin + y() - size.height;
+        wanted = above >= screenY ? above : std::max(screenY, screenY + screenH - size.height);
+      }
+      // Undo the offset FLTK applies for the highlighted item.
+      top = wanted - origin - (h() - size.itemHeight) / 2 + size.selected * size.itemHeight + size.border;
+    }
+    Fl_Widget_Tracker tracker(this);
+    const Fl_Menu_Item* choice = menu()->pulldown(x(), top, w(), h(), current, this);
+    if (!choice || choice->submenu() || tracker.deleted()) return;
+    if (choice != mvalue()) redraw();
+    picked(choice);
+  }
   Palette colors_ = palette(false);
   Fl_Color background_ = palette(false).background;
 };
@@ -507,6 +565,7 @@ public:
       library_(std::move(library)), workspace_(library_.layouts[activeLayout(library_)].workspace), path_(std::move(path)),
       updater_(path_, checkUpdates)
   {
+    Session::acceptUnknownCertificates(library_.acceptUnknownCertificates);
     size_range(860, 600);
     begin();
     add_ = new Button(0, 0, 132, 38, "+ Add panel", true);
@@ -891,7 +950,9 @@ private:
       {"Connect all", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {"Disconnect all", 0, nullptr, nullptr, FL_MENU_DIVIDER, 0, 0, 0, 0},
       {"Reset pane divisions", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
-      {workspace_.dark ? "Light theme" : "Dark theme", 0, nullptr, nullptr, FL_MENU_DIVIDER, 0, 0, 0, 0},
+      {workspace_.dark ? "Light theme" : "Dark theme", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
+      {"Accept unknown certificates", 0, nullptr, nullptr,
+       FL_MENU_TOGGLE | FL_MENU_DIVIDER | (library_.acceptUnknownCertificates ? FL_MENU_VALUE : 0), 0, 0, 0, 0},
       {"Custom grid: 1 column", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {"Custom grid: 2 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {"Custom grid: 3 columns", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
@@ -899,13 +960,16 @@ private:
       {updater_.available() ? "Update available..." : "Updates...", 0, nullptr, nullptr, 0, 0, 0, 0, 0},
       {nullptr, 0, nullptr, nullptr, 0, 0, 0, 0, 0}
     };
-    const auto* choice = items->pulldown(actions_->x(), actions_->y(), actions_->w(), actions_->h(), nullptr, layouts_);
+    // The button sits at the window's right edge, so align the menu's right side with it.
+    int left = actions_->x() + actions_->w() - measureMenu(items, layouts_).width;
+    const auto* choice = items->pulldown(left, actions_->y(), actions_->w(), actions_->h(), nullptr, layouts_);
     if (!choice) return;
     int action = static_cast<int>(choice - items);
     if (action <= 1) for (auto* tile : tiles_) { if (action == 0) tile->session.start(); else tile->session.stop(); }
     else if (action == 2) resetDividers();
     else if (action == 3) { workspace_.dark = !workspace_.dark; applyTheme(); save(); }
-    else if (action == 8) {
+    else if (action == 4) toggleCertificates();
+    else if (action == 9) {
       UpdateDialog dialog(updater_, colors());
       if (dialog.run() && save()) {
         if (!updater_.install()) { fl_alert("%s", updater_.message().c_str()); return; }
@@ -913,10 +977,23 @@ private:
         hide();
       }
     } else {
-      workspace_.columns = action - 3;
+      workspace_.columns = action - 4;
       for (auto* tile : tiles_) tile->panel.columns = tile->panel.rows = 1;
       choosePreset(Preset::CustomGrid);
     }
+  }
+  void toggleCertificates() {
+    bool enable = !library_.acceptUnknownCertificates;
+    if (enable && fl_choice("Accept new, changed, expired and mismatched panel certificates\n"
+                            "without asking, on every layout?\n\n"
+                            "Connections stay encrypted, but a panel's identity is no longer\n"
+                            "checked. Use this only on a trusted network.",
+                            "Cancel", "Accept all", nullptr) != 1) return;
+    Library candidate = library_; candidate.acceptUnknownCertificates = enable;
+    try { saveLibrary(path_, candidate); }
+    catch (const std::exception& error) { fl_alert("Could not save setting: %s", error.what()); return; }
+    library_ = std::move(candidate);
+    Session::acceptUnknownCertificates(enable);
   }
   void applyTheme() {
     const auto p = colors(); color(p.background); scroll_->color(p.background);

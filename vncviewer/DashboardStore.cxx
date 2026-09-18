@@ -78,6 +78,8 @@ void writeDatabase(sqlite3* db, const Library& library) {
     "DELETE FROM layouts; DELETE FROM metadata;");
   auto meta = prepare(db, "INSERT INTO metadata VALUES ('active', ?)");
   bind(db, meta.get(), 1, library.active); checked(db, sqlite3_step(meta.get()));
+  if (library.acceptUnknownCertificates)
+    execute(db, "INSERT INTO metadata VALUES ('acceptUnknownCertificates', '1')");
   auto insert = prepare(db, "INSERT INTO layouts VALUES (?, ?, ?, ?)");
   int position = 0;
   for (const auto& layout : library.layouts) {
@@ -99,6 +101,9 @@ Library readDatabase(sqlite3* db) {
   Library library;
   auto meta = prepare(db, "SELECT value FROM metadata WHERE key='active'");
   checked(db, sqlite3_step(meta.get())); library.active = textColumn(meta.get(), 0);
+  auto accept = prepare(db, "SELECT value FROM metadata WHERE key='acceptUnknownCertificates'");
+  int found = sqlite3_step(accept.get()); checked(db, found);
+  library.acceptUnknownCertificates = found == SQLITE_ROW && textColumn(accept.get(), 0) == "1";
   auto rows = prepare(db, "SELECT id, name, workspace FROM layouts ORDER BY position");
   for (;;) {
     int code = sqlite3_step(rows.get()); checked(db, code);
@@ -183,7 +188,7 @@ size_t activeLayout(const Library& library) {
 }
 Library newLibrary() {
   SavedLayout layout{newId(), "Main workspace", {}};
-  return {layout.id, {layout}};
+  return {layout.id, {layout}, false};
 }
 Library loadLibrary(const std::filesystem::path& path) {
   if (!std::filesystem::exists(path)) return newLibrary();
@@ -234,6 +239,8 @@ bool encryptedExport(const std::filesystem::path& path) {
 void exportLibrary(const std::filesystem::path& path, const Library& library, const std::string& password) {
   if (!password.empty() && password.size() < 8) throw std::runtime_error("Use at least 8 characters for the export password");
   Library portable = library;
+  // Certificate trust stays local; an import must never relax it elsewhere.
+  portable.acceptUnknownCertificates = false;
   for (auto& layout : portable.layouts) for (auto& panel : layout.workspace.panels) {
     if (password.empty() || !panel.rememberPassword) panel.credential.clear();
     else {

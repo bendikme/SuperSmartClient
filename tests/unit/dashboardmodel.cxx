@@ -321,6 +321,17 @@ TEST_F(DashboardModel, SQLiteRoundtripRetainsNamedLayoutsAndActiveSelection) {
   EXPECT_EQ(loaded.layouts[1].workspace.columns, 4);
   EXPECT_EQ(loaded.layouts[1].workspace.panels[0].columns, 2);
 }
+TEST_F(DashboardModel, AcceptUnknownCertificatesPersistsLocallyAndIsNeverExported) {
+  auto library = newLibrary(); auto path = directory / "layouts.db";
+  saveLibrary(path, library); EXPECT_FALSE(loadLibrary(path).acceptUnknownCertificates);
+  library.acceptUnknownCertificates = true; saveLibrary(path, library);
+  EXPECT_TRUE(loadLibrary(path).acceptUnknownCertificates);
+  auto exported = directory / "trust.sscdb"; exportLibrary(exported, library, "");
+  auto imported = importLibrary(exported, ""); EXPECT_FALSE(imported.acceptUnknownCertificates);
+  mergeLibrary(library, imported); EXPECT_TRUE(library.acceptUnknownCertificates);
+  library.acceptUnknownCertificates = false; saveLibrary(path, library);
+  EXPECT_FALSE(loadLibrary(path).acceptUnknownCertificates);
+}
 TEST_F(DashboardModel, FailedSavePreservesPreviousDatabase) {
   auto original = newLibrary(); auto path = directory / "layouts.db"; saveLibrary(path, original);
   auto invalid = original; invalid.layouts.push_back({newId(), original.layouts[0].name, {}});

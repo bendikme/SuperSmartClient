@@ -7,7 +7,11 @@
 
 namespace dashboard {
 struct SavedLayout { std::string id, name; Workspace workspace; };
-struct Library { std::string active; std::vector<SavedLayout> layouts; };
+struct Library {
+  std::string active; std::vector<SavedLayout> layouts;
+  // Applies to every layout on this PC. Never exported or merged by import.
+  bool acceptUnknownCertificates = false;
+};
 Library newLibrary();
 Library loadLibrary(const std::filesystem::path& path);
 void saveLibrary(const std::filesystem::path& path, const Library& library);

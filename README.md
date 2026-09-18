@@ -77,7 +77,15 @@ Windows PowerShell 5.1 are required. Keep the DLLs, fonts, `manifest.json` and
   group. Connections in the previous layout close. On app startup, the last
   active layout reopens, respecting each panel's **Connect on startup** setting.
 - The toolbar **...** menu contains **Connect all**, **Disconnect all**,
-  **Reset pane divisions**, **Light theme / Dark theme**, and custom column counts.
+  **Reset pane divisions**, **Light theme / Dark theme**, **Accept unknown
+  certificates** and custom column counts.
+- **Accept unknown certificates** (off by default) answers every certificate
+  prompt with yes: new, changed, expired, not-yet-valid, weakly signed and
+  hostname-mismatched certificates are accepted and remembered without asking.
+  Traffic stays encrypted, but the panel's identity is no longer verified, so
+  use it only on a trusted network. The setting applies to all layouts, is
+  saved in this PC's database, and is never included in an export. Problems
+  that never produced a prompt, such as a revoked certificate, still fail.
 - Roboto regular, bold and italic fonts are bundled and used throughout the
   application UI. They are loaded privately for this app, without installing
   fonts into Windows or changing the panel's own display.
@@ -191,6 +199,8 @@ Use **Anonymous TLS (legacy)** only when the server is known to offer `TLSVnc`.
 This mode is explicit; the viewer never silently downgrades certificate TLS.
 Self-signed certificates use the upstream certificate verification and trust
 prompts; this fork does not bypass verification or enable obsolete TLS versions.
+The dashboard's opt-in **Accept unknown certificates** setting only answers
+those prompts automatically; it does not change the TLS handshake.
 
 ```powershell
 .\SuperSmartClient.exe -UnifiedPanel -ViewOnly 192.168.0.10::5900
