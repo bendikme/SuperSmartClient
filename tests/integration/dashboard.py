@@ -406,6 +406,36 @@ class DashboardTests(unittest.TestCase):
             time.sleep(0.04)
         self.fail("Cannot find this fixture's dashboard window")
 
+    def wait_for_bounds(self, expected, message):
+        # A fullscreen transition replaces the X11 window, so an identifier found
+        # while it is in progress can vanish. Resolve the window on every poll.
+        found = []
+        def settled():
+            try:
+                window = self.window()
+                if not expected(self.geometry(window)):
+                    return False
+            except subprocess.CalledProcessError:
+                return False
+            found[:] = [window]
+            return True
+        wait_for(settled, message)
+        return found[0]
+
+    def dialog(self, name):
+        # A popup menu or tooltip that closes while xdotool enumerates windows
+        # makes the search fail outright, so retry until the dialog is there.
+        found = []
+        def visible():
+            try:
+                found[:] = self.xdo("search", "--all", "--onlyvisible", "--pid", self.process.pid,
+                                    "--name", name).splitlines()
+            except subprocess.CalledProcessError:
+                return False
+            return bool(found)
+        wait_for(visible, f"Dialog did not open: {name}")
+        return found[0]
+
     def click(self, window, x, y):
         self.xdo("mousemove", "--window", window, x, y)
         self.xdo("click", 1)
@@ -506,8 +536,7 @@ class DashboardTests(unittest.TestCase):
         with self.viewer():
             window = self.window()
             self.click(window, 465, 20)
-            editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                              "--name", "Add panel - SuperSmartClient").splitlines()[0]
+            editor = self.dialog("Add panel - SuperSmartClient")
             self.assertEqual(int(self.xdo("getwindowpid", editor)), self.process.pid)
             self.xdo("windowfocus", "--sync", editor)
             for x, y, value in [(70, 103, "New panel fixture"), (70, 168, f"127.0.0.1::{server.port}"),
@@ -598,8 +627,7 @@ class DashboardTests(unittest.TestCase):
             self.assertLess(max(pixel(popup, 3, 3)), 100, "Dark popup has a light background")
             self.xdo("key", "Escape")
             self.click(window, 465, 20)
-            editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                              "--name", "Add panel - SuperSmartClient").splitlines()[0]
+            editor = self.dialog("Add panel - SuperSmartClient")
             time.sleep(0.1)
             form = picture(editor, ".dark-editor.png")
             self.assertEqual(pixel(form, 10, 10), (17, 24, 39), "Dialog did not inherit dark mode")
@@ -616,8 +644,7 @@ class DashboardTests(unittest.TestCase):
             self.xdo("key", "Down", "Down", "Down", "Down", "Return")
             self.click(window, 1298, 20)
             self.xdo("key", *(["Down"] * 10), "Return")
-            dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                              "--name", "SuperSmartClient updates").splitlines()[0]
+            dialog = self.dialog("SuperSmartClient updates")
             picture = self.picture(dialog, ".updates.png")
             self.assertEqual(self.pixel(picture, 10, 10), (17, 24, 39))
             self.assertEqual(self.pixel(picture, 310, 221), (39, 56, 78), "Disabled download looks active")
@@ -647,8 +674,7 @@ class DashboardTests(unittest.TestCase):
                     self.click(window, 1298, 20)
                     self.xdo("key", "Down", "Down", "Down", "Down", "Return")
                 self.click(window, 465, 20)
-                editor = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                                  "--name", "Add panel - SuperSmartClient").splitlines()[0]
+                editor = self.dialog("Add panel - SuperSmartClient")
                 self.xdo("windowfocus", "--sync", editor)
                 before = self.picture(editor, f".checkbox-{theme}.png")
                 self.assert_checkbox(before, 28, 352, 25, True)
@@ -681,8 +707,7 @@ class DashboardTests(unittest.TestCase):
                 if percent != current:
                     self.click(window, 4 + 1280 * current // 100 + 2 - 16, 56)
                     self.xdo("key", *(7 * ["Down"]), "Return")
-                    dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                                      "--name", "Panel size and scale").splitlines()[0]
+                    dialog = self.dialog("Panel size and scale")
                     self.xdo("windowfocus", "--sync", dialog)
                     self.click(dialog, 65, 140)
                     self.xdo("key", "ctrl+a")
@@ -740,8 +765,7 @@ class DashboardTests(unittest.TestCase):
             window = self.window()
             self.click(window, 643, 56)  # First tile's local menu.
             self.xdo("key", *(7 * ["Down"]), "Return")
-            dialog = self.xdo("search", "--all", "--sync", "--onlyvisible", "--pid", self.process.pid,
-                               "--name", "Panel size and scale").splitlines()[0]
+            dialog = self.dialog("Panel size and scale")
             self.xdo("windowfocus", "--sync", dialog)
             self.click(dialog, 160, 72)
             self.xdo("key", "Down", "Down", "Down", "Return")  # MTP1200 1280 x 800
@@ -842,8 +866,7 @@ class DashboardTests(unittest.TestCase):
             self.xdo("keydown", "a")
             wait_for(lambda: ("key", 1, ord("a")) in servers[0].inputs, "Fixture did not take keyboard focus")
             self.xdo("key", "F11")
-            window = self.window()
-            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Fullscreen did not cover the test display")
+            window = self.wait_for_bounds(lambda bounds: bounds["WIDTH"] == 1600, "Fullscreen did not cover the test display")
             self.xdo("keyup", "a")
             wait_for(lambda: ("key", 0, ord("a")) in servers[0].inputs, "Fullscreen left a remote key held")
             full = self.picture(window, ".fullscreen.png")
@@ -853,29 +876,25 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.pixel(full, 100, 998), (244, 247, 250), "Footer remains in fullscreen")
             self.click(window, 200, 500)
             self.xdo("key", "Escape")
-            window = self.window()
-            wait_for(lambda: self.geometry(window) == original, "Escape did not restore window bounds")
+            window = self.wait_for_bounds(lambda bounds: bounds == original, "Escape did not restore window bounds")
             self.assertFalse(any(event[0] == "key" and event[2] in (0xffc8, 0xff1b)
                                  for server in servers for event in server.inputs), "Fullscreen shortcuts reached a panel")
             # The visible exit button consumes its entire click, including release.
             self.click(window, 1070, 20)
-            window = self.window()
-            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Fullscreen button did not enter")
+            window = self.wait_for_bounds(lambda bounds: bounds["WIDTH"] == 1600, "Fullscreen button did not enter")
             before = sum(len(server.inputs) for server in servers)
             self.click(window, 1579, 18)
-            window = self.window()
-            wait_for(lambda: self.geometry(window) == original, "Exit button did not restore window bounds")
+            window = self.wait_for_bounds(lambda bounds: bounds == original, "Exit button did not restore window bounds")
             self.assertEqual(sum(len(server.inputs) for server in servers), before)
             self.assertEqual([server.connections for server in servers], [1, 1])
             # Auto-repeat must not toggle repeatedly while the key is held.
             self.xdo("keydown", "F11")
             window = self.window()
             self.xdo("keydown", "F11")
-            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Repeated F11 toggled back out")
+            window = self.wait_for_bounds(lambda bounds: bounds["WIDTH"] == 1600, "Repeated F11 toggled back out")
             self.xdo("keyup", "F11")
             self.xdo("key", "F11")
-            window = self.window()
-            wait_for(lambda: self.geometry(window) == original, "F11 did not restore after repeat")
+            window = self.wait_for_bounds(lambda bounds: bounds == original, "F11 did not restore after repeat")
             encoded = database_layout(self.db)
             self.assertIn("width=1160", encoded)
             self.assertIn("height=780", encoded)
@@ -901,12 +920,10 @@ class DashboardTests(unittest.TestCase):
                     for key in ("pixelX", "pixelY", "pixelWidth", "pixelHeight", "fit", "scale", "displayPreset"):
                         self.assertEqual(after[key], before[key], f"Arrangement changed saved {key}")
             self.xdo("key", "F11")
-            window = self.window()
-            wait_for(lambda: self.geometry(window)["WIDTH"] == 1600, "Free layout did not enter fullscreen")
+            window = self.wait_for_bounds(lambda bounds: bounds["WIDTH"] == 1600, "Free layout did not enter fullscreen")
             self.picture(window, ".free-fullscreen.png")
             self.xdo("key", "Escape")
-            window = self.window()
-            wait_for(lambda: self.geometry(window)["WIDTH"] == 1320, "Free layout did not restore")
+            window = self.wait_for_bounds(lambda bounds: bounds["WIDTH"] == 1320, "Free layout did not restore")
             self.choose_preset(window, 2)
             self.choose_preset(window, 9)
             for before, after in zip(original, saved_profiles(self.db)):

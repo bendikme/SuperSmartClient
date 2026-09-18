@@ -16,6 +16,8 @@ SuperSmartClient brings Siemens Unified panels together in one compact workspace
   the screen and scrolling back into view.
 - The workspace **...** menu now lines up with the right edge of its button
   instead of extending past the window.
+- Linux builds: **F11** no longer stops responding after the first fullscreen
+  switch on an X11 display without a window manager.
 
 ## Updating
 

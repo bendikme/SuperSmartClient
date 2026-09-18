@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <set>
 #include <memory>
@@ -811,6 +812,11 @@ private:
     // Schedule before processing so other sessions keep updating in certificate dialogs.
     Fl::repeat_timeout(0.04, tick, data);
     for (auto* tile : app.tiles_) tile->session.tick();
+    // X11 without a window manager recreates the window for fullscreen and the
+    // shortcut's release goes to the old one. Ask the keyboard instead of
+    // waiting for it, or the key stays "held" and later presses are ignored.
+    for (auto key = app.localKeys_.begin(); key != app.localKeys_.end();)
+      key = Fl::get_key(*key) ? std::next(key) : app.localKeys_.erase(key);
   }
   Tile* addTile(const Panel& panel) {
     Fl_Group* previous = Fl_Group::current();
