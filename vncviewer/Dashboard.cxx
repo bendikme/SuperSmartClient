@@ -9,6 +9,7 @@
 #include "AppUpdate.h"
 #include "parameters.h"
 #include "keysym2ucs.h"
+#include "fltk/event_dispatch_handler.h"
 
 #include <algorithm>
 #include <cmath>
@@ -216,6 +217,18 @@ private:
   // that placement on screen, so a field near a screen edge gets a list that
   // starts outside it and scrolls back. Open below the field, or above it when
   // there is no room, and keep the current item highlighted for the keyboard.
+  //
+  // FLTK clears the highlight on any pointer movement outside the list, and the
+  // pointer now starts on the field rather than on the current item. Ignore
+  // that movement so Up and Down still continue from the current item.
+  static int keepHighlight(int event, Fl_Window*, void*) {
+    if (event != FL_MOVE && event != FL_ENTER && event != FL_DRAG) return 0;
+    const Fl_Window* list = Fl::grab();
+    if (!list) return 0;
+    int mouseX = Fl::event_x_root(), mouseY = Fl::event_y_root();
+    return mouseX < list->x() || mouseX >= list->x() + list->w() ||
+           mouseY < list->y() || mouseY >= list->y() + list->h();
+  }
   void dropdown() {
     const Fl_Menu_Item* current = mvalue();
     int top = y();
@@ -236,7 +249,9 @@ private:
       top = wanted - origin - (h() - size.itemHeight) / 2 + size.selected * size.itemHeight + size.border;
     }
     Fl_Widget_Tracker tracker(this);
+    fl_add_event_dispatch(keepHighlight, this);
     const Fl_Menu_Item* choice = menu()->pulldown(x(), top, w(), h(), current, this);
+    fl_remove_event_dispatch(keepHighlight, this);
     if (!choice || choice->submenu() || tracker.deleted()) return;
     if (choice != mvalue()) redraw();
     picked(choice);
