@@ -1,5 +1,23 @@
 SuperSmartClient brings Siemens Unified panels together in one compact workspace.
 
+## New in 1.0.2
+
+- **Panels appear much sooner.** A connection is now handled the moment the
+  panel answers, and the certificate store of Windows is read once instead of
+  once for every panel. In our tests with four encrypted panels, the first
+  pictures arrived in less than half the time. Reconnecting is quicker as well.
+- **Smoother with many panels.** Fitting a panel's picture to its pane takes a
+  fraction of the time it did, with exactly the same picture. Several panels
+  updating at once, and resizing panes or the window, no longer slow the app down.
+- **Updates are easier to notice.** When a new release is available, a green
+  **Update available** button appears in the toolbar beside **Full screen**,
+  also the next time you start the app. Click it to download the update and
+  install it when convenient; nothing opens by itself. While downloading it
+  reads **Downloading update...**, then **Install update**.
+- Certificate checks are unchanged. A change to the trusted certificates of
+  Windows, or to your own certificate authority file, takes effect for new
+  connections within five minutes.
+
 ## New in 1.0.1
 
 - **Accept unknown certificates.** A new option in the workspace **...** menu
@@ -21,10 +39,10 @@ SuperSmartClient brings Siemens Unified panels together in one compact workspace
 
 ## Updating
 
-From 1.0.0, choose **Updates...** in the workspace **...** menu, then **Download
-update** and **Install and restart**. Downloads and files are verified before
-installation, with a backup for rollback. Saved layouts, passwords and accepted
-certificates are kept.
+From 1.0.0 or 1.0.1, choose **Updates...** in the workspace **...** menu, then
+**Download update** and **Install and restart**. Downloads and files are
+verified before installation, with a backup for rollback. Saved layouts,
+passwords and accepted certificates are kept.
 
 For a new installation, download the Windows x64 ZIP, extract the entire folder,
 and run `SuperSmartClient.exe`. Keep the included DLLs, fonts, manifest and update

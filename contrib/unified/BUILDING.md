@@ -124,8 +124,8 @@ ctest --test-dir build/tests/unit --output-on-failure
 3. Tag that commit with the matching `ssc-v` version and push the tag:
 
    ```sh
-   git tag -a ssc-v1.0.1 -m "SuperSmartClient 1.0.1"
-   git push origin ssc-v1.0.1
+   git tag -a ssc-v1.0.2 -m "SuperSmartClient 1.0.2"
+   git push origin ssc-v1.0.2
    ```
 
 The tag workflow runs both platforms, verifies the packaged version and all file
