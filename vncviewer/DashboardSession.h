@@ -41,6 +41,7 @@ public:
 private:
   class Connection;
   struct Connector;
+  struct Events;
   void beginAttempt();
   void failed(const std::string& message, bool attention);
   void clearTransport();
@@ -51,6 +52,10 @@ private:
   std::unique_ptr<Connection> connection_;
   State status_ = State::Offline;
   bool wanted_ = false, pumping_ = false;
+  // Something happened on the connection since the last tick.
+  bool ready_ = false;
+  // The socket whose activity wakes the event loop, or -1.
+  long long watched_ = -1;
   std::string error_;
   unsigned failures_ = 0, generation_ = 0, buttons_ = 0;
   int width_ = 0, height_ = 0, lastCountdown_ = -1;

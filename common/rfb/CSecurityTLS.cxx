@@ -30,9 +30,14 @@
 #endif
 
 #include <stdlib.h>
+#include <sys/stat.h>
 #ifndef WIN32
 #include <unistd.h>
 #endif
+
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 #include <core/LogWriter.h>
 #include <core/string.h>
@@ -71,6 +76,148 @@ static const char* configdirfn(const char* fn)
   return full_path;
 }
 
+// Reading the operating system's trust store takes a noticeable time,
+// so the sessions share one loaded copy rather than each reading their
+// own. It is read again once the files it was built from change, and
+// after a few minutes, so changes to the system's store are picked up.
+
+struct FileStamp {
+  bool exists;
+  time_t modified;
+  long long size;
+
+  bool operator==(const FileStamp& other) const {
+    return exists == other.exists && modified == other.modified &&
+           size == other.size;
+  }
+};
+
+static FileStamp fileStamp(const std::string& path)
+{
+  FileStamp stamp = { false, 0, 0 };
+  struct stat info;
+
+  if (!path.empty() && stat(path.c_str(), &info) == 0) {
+    stamp.exists = true;
+    stamp.modified = info.st_mtime;
+    stamp.size = info.st_size;
+  }
+
+  return stamp;
+}
+
+struct CSecurityTLS::TrustStore {
+  TrustStore(const std::string& ca_, const std::string& crl_);
+  ~TrustStore();
+
+  bool current(const std::string& ca_, const std::string& crl_) const;
+
+  gnutls_certificate_credentials_t cred;
+  std::string ca, crl;
+  FileStamp caStamp, crlStamp;
+  std::chrono::steady_clock::time_point loaded;
+};
+
+CSecurityTLS::TrustStore::TrustStore(const std::string& ca_,
+                                     const std::string& crl_)
+  : cred(nullptr), ca(ca_), crl(crl_),
+    caStamp(fileStamp(ca_)), crlStamp(fileStamp(crl_)),
+    loaded(std::chrono::steady_clock::now())
+{
+  int ret;
+
+  ret = gnutls_global_init();
+  if (ret != GNUTLS_E_SUCCESS)
+    throw rdr::tls_error("gnutls_global_init()", ret);
+
+  ret = gnutls_certificate_allocate_credentials(&cred);
+  if (ret != GNUTLS_E_SUCCESS) {
+    gnutls_global_deinit();
+    throw rdr::tls_error("gnutls_certificate_allocate_credentials()", ret);
+  }
+
+  if (gnutls_certificate_set_x509_system_trust(cred) < 1)
+    vlog.error("Could not load system certificate trust store");
+
+  if (gnutls_certificate_set_x509_trust_file(cred, ca.c_str(), GNUTLS_X509_FMT_PEM) < 0)
+    vlog.error("Could not load user specified certificate authority");
+
+  if (gnutls_certificate_set_x509_crl_file(cred, crl.c_str(), GNUTLS_X509_FMT_PEM) < 0)
+    vlog.error("Could not load user specified certificate revocation list");
+}
+
+CSecurityTLS::TrustStore::~TrustStore()
+{
+  gnutls_certificate_free_credentials(cred);
+  gnutls_global_deinit();
+}
+
+bool CSecurityTLS::TrustStore::current(const std::string& ca_,
+                                       const std::string& crl_) const
+{
+  if (ca != ca_ || crl != crl_)
+    return false;
+  if (!(caStamp == fileStamp(ca)) || !(crlStamp == fileStamp(crl)))
+    return false;
+
+  return std::chrono::steady_clock::now() - loaded < std::chrono::minutes(5);
+}
+
+struct SharedTrust {
+  std::mutex mutex;
+  std::shared_ptr<CSecurityTLS::TrustStore> store;
+};
+
+static SharedTrust& sharedTrust()
+{
+  // Never destroyed, as a preload can still be running at exit
+  static SharedTrust* shared = new SharedTrust;
+  return *shared;
+}
+
+std::shared_ptr<CSecurityTLS::TrustStore>
+CSecurityTLS::acquireTrust(const std::string& ca, const std::string& crl)
+{
+  SharedTrust& shared = sharedTrust();
+
+  // A session that gets here during a preload waits for its result
+  std::lock_guard<std::mutex> lock(shared.mutex);
+
+  if (!shared.store || !shared.store->current(ca, crl))
+    shared.store = std::make_shared<TrustStore>(ca, crl);
+
+  return shared.store;
+}
+
+void CSecurityTLS::preloadTrust()
+{
+  std::string ca((const char*)X509CA), crl((const char*)X509CRL);
+
+  {
+    SharedTrust& shared = sharedTrust();
+    std::unique_lock<std::mutex> lock(shared.mutex, std::try_to_lock);
+
+    // Already being read, or still usable?
+    if (!lock.owns_lock())
+      return;
+    if (shared.store && shared.store->current(ca, crl))
+      return;
+  }
+
+  try {
+    std::thread([ca, crl]() {
+      try {
+        acquireTrust(ca, crl);
+      } catch (std::exception& e) {
+        vlog.error("Could not preload the certificate trust store: %s",
+                   e.what());
+      }
+    }).detach();
+  } catch (std::exception&) {
+    // The first session reads the store itself
+  }
+}
+
 CSecurityTLS::CSecurityTLS(CConnection* cc_, bool _anon, Handshake handshake_)
   : CSecurity(cc_), session(nullptr),
     anon_cred(nullptr), cert_cred(nullptr),
@@ -92,10 +239,7 @@ void CSecurityTLS::shutdown()
     anon_cred = nullptr;
   }
 
-  if (cert_cred) {
-    gnutls_certificate_free_credentials(cert_cred);
-    cert_cred = nullptr;
-  }
+  cert_cred = nullptr;
 
   if (rawis && rawos) {
     cc->setStreams(rawis, rawos);
@@ -112,6 +256,9 @@ void CSecurityTLS::shutdown()
     gnutls_deinit(session);
     session = nullptr;
   }
+
+  // The session referred to the shared credentials until now
+  trust.reset();
 }
 
 
@@ -244,18 +391,8 @@ void CSecurityTLS::setParam()
     size_t len;
     bool valid;
 
-    ret = gnutls_certificate_allocate_credentials(&cert_cred);
-    if (ret != GNUTLS_E_SUCCESS)
-      throw rdr::tls_error("gnutls_certificate_allocate_credentials()", ret);
-
-    if (gnutls_certificate_set_x509_system_trust(cert_cred) < 1)
-      vlog.error("Could not load system certificate trust store");
-
-    if (gnutls_certificate_set_x509_trust_file(cert_cred, X509CA, GNUTLS_X509_FMT_PEM) < 0)
-      vlog.error("Could not load user specified certificate authority");
-
-    if (gnutls_certificate_set_x509_crl_file(cert_cred, X509CRL, GNUTLS_X509_FMT_PEM) < 0)
-      vlog.error("Could not load user specified certificate revocation list");
+    trust = acquireTrust((const char*)X509CA, (const char*)X509CRL);
+    cert_cred = trust->cred;
 
     ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, cert_cred);
     if (ret != GNUTLS_E_SUCCESS)

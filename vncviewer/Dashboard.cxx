@@ -19,6 +19,9 @@
 #include <memory>
 #include <stdexcept>
 #include <core/string.h>
+#ifdef HAVE_GNUTLS
+#include <rfb/CSecurityTLS.h>
+#endif
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
@@ -1347,6 +1350,13 @@ int runDashboard(const char* configPath)
   try {
     auto path = configPath && configPath[0] ? std::filesystem::u8path(configPath) : dashboard::defaultWorkspacePath();
     auto library = dashboard::loadLibrary(path);
+#ifdef HAVE_GNUTLS
+    // Read the certificate store while the window is being built.
+    for (const auto& panel : library.layouts[dashboard::activeLayout(library)].workspace.panels)
+      if (panel.autoConnect && panel.security == dashboard::SecurityMode::Certificate) {
+        rfb::CSecurityTLS::preloadTrust(); break;
+      }
+#endif
     dashboard::Dashboard window(std::move(library), path);
     window.show(); window.start();
     return Fl::run();

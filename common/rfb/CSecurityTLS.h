@@ -27,6 +27,9 @@
 #error "This header should not be compiled without HAVE_GNUTLS defined"
 #endif
 
+#include <memory>
+#include <string>
+
 #include <rfb/CSecurity.h>
 #include <rfb/Security.h>
 
@@ -53,6 +56,13 @@ namespace rfb {
     static core::StringParameter X509CA;
     static core::StringParameter X509CRL;
 
+    // Reads the certificate trust store on another thread, so the first
+    // connection does not have to wait for it
+    static void preloadTrust();
+
+    // The loaded trust store that the sessions share
+    struct TrustStore;
+
   protected:
     void shutdown();
     void freeResources();
@@ -61,9 +71,14 @@ namespace rfb {
     CConnection *client;
 
   private:
+    static std::shared_ptr<TrustStore> acquireTrust(const std::string& ca,
+                                                    const std::string& crl);
+
     gnutls_session_t session;
     gnutls_anon_client_credentials_t anon_cred;
+    // Owned by the trust store, which the sessions share
     gnutls_certificate_credentials_t cert_cred;
+    std::shared_ptr<TrustStore> trust;
     bool anon;
     Handshake handshake;
 

@@ -7,6 +7,8 @@
 #include "DashboardImage.h"
 #include "AppUpdate.h"
 #include "DashboardStore.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <set>
@@ -245,6 +247,54 @@ TEST_F(DashboardModel, DownscalingRetainsThinStrokesBetweenSamplePositions) {
     int darkest = 255;
     for (int x = 0; x < 20; ++x) darkest = std::min(darkest, static_cast<int>(pixels[(4 * 20 + x) * 3]));
     EXPECT_LT(darkest, 220) << "Lost a one-pixel stroke at source column " << position;
+  }
+}
+TEST_F(DashboardModel, LargePicturesScaleLikeAPlainFilter) {
+  // Large enough to be divided between threads, with a height that leaves
+  // incomplete groups of rows at the end of every part.
+  const int sourceWidth = 517, sourceHeight = 301;
+  std::vector<uint8_t> source(sourceWidth * sourceHeight * 3);
+  for (size_t index = 0; index < source.size(); ++index) source[index] = static_cast<uint8_t>((index * 2654435761u) >> 13);
+  struct Taps { int first; std::vector<double> weights; };
+  auto taps = [](int from, int to) {
+    std::vector<Taps> result(to);
+    const double pi = 3.14159265358979323846, ratio = from / static_cast<double>(to), footprint = std::max(1.0, ratio);
+    for (int position = 0; position < to; ++position) {
+      double centre = (position + 0.5) * ratio - 0.5, total = 0;
+      result[position].first = std::max(0, static_cast<int>(std::ceil(centre - 3 * footprint)));
+      int last = std::min(from - 1, static_cast<int>(std::floor(centre + 3 * footprint)));
+      for (int sample = result[position].first; sample <= last; ++sample) {
+        double x = std::abs((sample - centre) / footprint);
+        double weight = x < 1e-9 ? 1 : x >= 3 ? 0 : std::sin(pi * x) * std::sin(pi * x / 3) / (pi * pi * x * x / 3);
+        result[position].weights.push_back(weight); total += weight;
+      }
+      for (auto& weight : result[position].weights) weight /= total;
+    }
+    return result;
+  };
+  ImageScaler scaler;
+  for (auto size : {std::make_pair(733, 419), std::make_pair(211, 487)}) {
+    const int width = size.first, height = size.second;
+    const auto& pixels = scaler.scale(source, sourceWidth, sourceHeight, width, height);
+    ASSERT_EQ(pixels.size(), static_cast<size_t>(width) * height * 3);
+    const auto across = taps(sourceWidth, width), down = taps(sourceHeight, height);
+    std::vector<double> rows(static_cast<size_t>(width) * sourceHeight * 3);
+    for (int y = 0; y < sourceHeight; ++y) for (int x = 0; x < width; ++x) for (int channel = 0; channel < 3; ++channel) {
+      double sum = 0;
+      for (size_t tap = 0; tap < across[x].weights.size(); ++tap)
+        sum += source[(static_cast<size_t>(y) * sourceWidth + across[x].first + tap) * 3 + channel] * across[x].weights[tap];
+      rows[(static_cast<size_t>(y) * width + x) * 3 + channel] = sum;
+    }
+    int worst = 0;
+    for (int y = 0; y < height; ++y) for (int sample = 0; sample < width * 3; ++sample) {
+      double sum = 0;
+      for (size_t tap = 0; tap < down[y].weights.size(); ++tap)
+        sum += rows[(down[y].first + tap) * width * 3 + sample] * down[y].weights[tap];
+      int expected = static_cast<int>(std::min(std::max(sum + 0.5, 0.0), 255.0));
+      worst = std::max(worst, std::abs(expected - pixels[static_cast<size_t>(y) * width * 3 + sample]));
+    }
+    // The scaler works in single precision, which can round a value the other way.
+    EXPECT_LE(worst, 1) << width << " x " << height;
   }
 }
 TEST_F(DashboardModel, EnlargementInterpolatesColoursWithoutChangingChannels) {

@@ -21,6 +21,10 @@
 #include <rfb/Exception.h>
 #include <rfb/PixelBuffer.h>
 #include <rfb/encodings.h>
+#ifdef HAVE_GNUTLS
+#include <rfb/CSecurityTLS.h>
+#endif
+#include <FL/Fl.H>
 
 #ifndef WIN32
 #include <fcntl.h>
@@ -47,7 +51,120 @@ void closeSocket(SocketHandle fd) { ::close(fd); }
 int socketError() { return errno; }
 #endif
 bool acceptCertificates = false;
+
+// Sessions are serviced as soon as their socket has something to read or
+// their connection attempt finishes, rather than on the dashboard's periodic
+// tick alone: every step of a handshake would otherwise wait for a tick.
+std::vector<Session*> sessions;            // Interface thread only.
+std::atomic<bool> attemptFinished{false};  // Set by the connecting threads.
+bool servicing = false, eventsStarted = false;
+#ifdef WIN32
+const UINT socketMessage = WM_APP + 0x351, wakeMessage = WM_APP + 0x352;
+HWND notifier = nullptr;
+#else
+int wakePipe[2] = {-1, -1};
+#endif
 }
+
+struct Session::Events {
+  static void start()
+  {
+#ifdef WIN32
+    // A hidden window receives the socket notifications and wake-up requests.
+    WNDCLASSW type{};
+    type.lpfnWndProc = notified;
+    type.hInstance = GetModuleHandleW(nullptr);
+    type.lpszClassName = L"SuperSmartClientSessionEvents";
+    if (RegisterClassW(&type))
+      notifier = CreateWindowExW(0, type.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
+                                 nullptr, type.hInstance, nullptr);
+#else
+    if (pipe(wakePipe) == 0) {
+      for (int end : wakePipe) { fcntl(end, F_SETFL, O_NONBLOCK); fcntl(end, F_SETFD, FD_CLOEXEC); }
+      Fl::add_fd(wakePipe[0], FL_READ, woken, nullptr);
+    } else wakePipe[0] = wakePipe[1] = -1;
+#endif
+    // Without these, the periodic tick alone still services every session.
+    Fl::add_check(service, nullptr);
+  }
+
+  static void watch(Session& session, SocketHandle fd)
+  {
+    session.watched_ = static_cast<long long>(fd);
+#ifdef WIN32
+    if (notifier) WSAAsyncSelect(fd, notifier, socketMessage, FD_READ | FD_CLOSE);
+#else
+    Fl::add_fd(fd, FL_READ, readable, &session);
+#endif
+  }
+
+  static void unwatch(Session& session)
+  {
+    if (session.watched_ < 0) return;
+    SocketHandle fd = static_cast<SocketHandle>(session.watched_);
+    session.watched_ = -1;
+#ifdef WIN32
+    if (notifier) WSAAsyncSelect(fd, notifier, 0, 0);
+#else
+    Fl::remove_fd(fd);
+#endif
+  }
+
+  // Makes the event loop run service() soon. Safe to call from any thread.
+  static void wake()
+  {
+#ifdef WIN32
+    if (notifier) PostMessageW(notifier, wakeMessage, 0, 0);
+#else
+    // A full pipe wakes the loop just as well.
+    if (wakePipe[1] >= 0 && write(wakePipe[1], "", 1) < 0) return;
+#endif
+  }
+
+  // Runs before the event loop waits. The handlers below only take notes, so
+  // a busy connection cannot keep the loop from drawing or handling input.
+  static void service(void*)
+  {
+    if (servicing) return;
+    bool attempts = attemptFinished.exchange(false), any = attempts;
+    for (const Session* session : sessions) any = any || session->ready_;
+    if (!any) return;
+    servicing = true;
+    // A session may open a dialog, during which the list can change.
+    const std::vector<Session*> current = sessions;
+    for (Session* session : current) {
+      if (std::find(sessions.begin(), sessions.end(), session) == sessions.end()) continue;
+      if (session->ready_ || (attempts && session->connector_)) session->tick();
+    }
+    servicing = false;
+  }
+
+#ifdef WIN32
+  static LRESULT CALLBACK notified(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+  {
+    if (message == wakeMessage) return 0;
+    if (message != socketMessage) return DefWindowProcW(window, message, wParam, lParam);
+    for (Session* session : sessions)
+      if (session->watched_ == static_cast<long long>(wParam)) session->ready_ = true;
+    return 0;
+  }
+#else
+  static void readable(FL_SOCKET, void* data)
+  {
+    Session* session = static_cast<Session*>(data);
+    session->ready_ = true;
+    // service() does not run inside a dialog that it opened itself, and
+    // unread data would keep waking the loop.
+    if (servicing) session->tick();
+  }
+
+  static void woken(FL_SOCKET fd, void*)
+  {
+    char discarded[64];
+    while (read(fd, discarded, sizeof(discarded)) > 0) {}
+  }
+#endif
+};
 
 void Session::acceptUnknownCertificates(bool value) { acceptCertificates = value; }
 
@@ -113,10 +230,14 @@ struct Session::Connector {
       if (Clock::now() >= deadline) break;
     }
     if (addresses) freeaddrinfo(addresses);
-    std::lock_guard<std::mutex> lock(result->mutex);
-    result->socket = std::move(connected);
-    result->error = message.empty() ? "Cannot connect to this host" : message;
-    result->done = true;
+    {
+      std::lock_guard<std::mutex> lock(result->mutex);
+      result->socket = std::move(connected);
+      result->error = message.empty() ? "Cannot connect to this host" : message;
+      result->done = true;
+    }
+    attemptFinished = true;
+    Events::wake();
   }
 };
 
@@ -148,19 +269,25 @@ public:
     setCompressLevel(2);
     setStreams(&socket_->inStream(), &socket_->outStream());
     initialiseProtocol();
+    Events::watch(owner_, static_cast<SocketHandle>(socket_->getFd()));
   }
 
-  ~Connection() override { close(); }
+  ~Connection() override { Events::unwatch(owner_); close(); }
 
-  void pump()
+  // Handles what has arrived, for a few milliseconds at most so that other
+  // sessions and the interface get their turn. Returns true if more is waiting.
+  bool pump()
   {
     socket_->outStream().flush();
     getOutStream()->cork(true);
     auto deadline = Clock::now() + std::chrono::milliseconds(4);
-    for (int count = 0; count < 128; ++count) {
-      if (!processMsg() || Clock::now() >= deadline) break;
+    bool more = true;
+    for (int count = 0; more && count < 128; ++count) {
+      more = processMsg();
+      if (Clock::now() >= deadline) break;
     }
     getOutStream()->cork(false);
+    return more;
   }
 
 protected:
@@ -178,7 +305,10 @@ protected:
     if (acceptCertificates && flags == rfb::MsgBoxFlags::M_YESNO) return true;
     UserDialog dialog;
     std::string caption = owner_.panel_.name + " - " + title;
+    // Nothing is read from this session while its dialog is open.
+    Events::unwatch(owner_);
     bool accepted = dialog.showMsgBox(flags, caption.c_str(), text);
+    Events::watch(owner_, static_cast<SocketHandle>(socket_->getFd()));
     owner_.handshakeDeadline_ = Clock::now() + std::chrono::seconds(20);
     return accepted;
   }
@@ -232,9 +362,15 @@ Session::Session(Panel& panel, std::function<void()> changed)
   : panel_(panel), changed_(std::move(changed))
 {
   network::initSockets();
+  if (!eventsStarted) { eventsStarted = true; Events::start(); }
+  sessions.push_back(this);
 }
 
-Session::~Session() { clearTransport(); }
+Session::~Session()
+{
+  clearTransport();
+  sessions.erase(std::remove(sessions.begin(), sessions.end(), this), sessions.end());
+}
 
 void Session::clearTransport()
 {
@@ -274,6 +410,10 @@ void Session::beginAttempt()
     network::getHostAndPort(panel_.address.c_str(), &host, &port);
     status_ = State::Connecting;
     error_.clear();
+#ifdef HAVE_GNUTLS
+    // Have the certificate store ready by the time the panel answers.
+    if (panel_.security == SecurityMode::Certificate) rfb::CSecurityTLS::preloadTrust();
+#endif
     connector_ = std::make_shared<Connector>();
     std::thread(Connector::run, connector_, host, port).detach();
     changed_();
@@ -298,6 +438,7 @@ void Session::tick()
 {
   if (pumping_) return;
   pumping_ = true;
+  ready_ = false;
   try {
     if (status_ == State::Retrying) {
       int seconds = std::max(0, static_cast<int>(
@@ -324,7 +465,8 @@ void Session::tick()
       }
     }
     if (connection_) {
-      connection_->pump();
+      // Stopped for the others' sake: continue as soon as they had their turn.
+      if (connection_->pump()) { ready_ = true; Events::wake(); }
       if (status_ == State::Authenticating && Clock::now() > handshakeDeadline_)
         throw std::runtime_error("Connection handshake timed out");
     }

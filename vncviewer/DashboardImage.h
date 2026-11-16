@@ -16,11 +16,13 @@ public:
   const std::vector<uint8_t>& scale(const std::vector<uint8_t>& source,
     int sourceWidth, int sourceHeight, int width, int height);
 private:
-  struct Filter { int first; std::vector<float> weights; };
-  static std::vector<Filter> filters(int source, int target);
+  // The weights of every output position, stored back to back: position p
+  // reads source samples first[p] onwards with weights[offset[p]..offset[p+1]).
+  struct Filters { std::vector<int> first, offset; std::vector<float> weights; };
+  static Filters filters(int source, int target);
   int sourceWidth_ = 0, sourceHeight_ = 0, width_ = 0, height_ = 0;
-  std::vector<Filter> horizontal_, vertical_;
-  std::vector<float> intermediate_;
+  Filters horizontal_, vertical_;
+  std::vector<float> intermediate_, scratch_;
   std::vector<uint8_t> pixels_;
 };
 
