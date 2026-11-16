@@ -12,7 +12,10 @@
 #include "fltk/event_dispatch_handler.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <csignal>
+#include <cstdlib>
 #include <iterator>
 #include <map>
 #include <set>
@@ -40,6 +43,13 @@
 
 namespace dashboard {
 namespace {
+// A request to end the program arrives as a signal, in the middle of whatever
+// the program is doing. Its handler only takes a note; the regular tick then
+// leaves through the event loop. Running exit() in the handler could wait
+// forever for a lock that the interrupted code holds.
+volatile std::sig_atomic_t terminationSignal = 0;
+void noteTermination(int signal) { terminationSignal = signal; }
+
 constexpr int frameWidth = 2, frameHeight = 26, toolbarHeight = 40;
 struct Palette {
   Fl_Color background, card, border, text, muted, accent, soft, green, amber;
@@ -641,6 +651,7 @@ public:
   }
   ~Dashboard() override { Fl::remove_timeout(tick, this); Fl::remove_timeout(updateTick, this); }
   void start() { for (auto* tile : tiles_) if (tile->panel.autoConnect) tile->session.start(); }
+  void stop() { for (auto* tile : tiles_) tile->session.stop(); }
   Palette colors() const { return palette(workspace_.dark); }
   bool focused(const Tile* tile) const { return focused_ == tile; }
   bool selected(const Tile* tile) const { return selected_ == tile; }
@@ -835,12 +846,27 @@ private:
     auto& app = *static_cast<Dashboard*>(data);
     // Schedule before processing so other sessions keep updating in certificate dialogs.
     Fl::repeat_timeout(0.04, tick, data);
+    if (terminationSignal) { app.terminate(); return; }
     for (auto* tile : app.tiles_) tile->session.tick();
     // X11 without a window manager recreates the window for fullscreen and the
     // shortcut's release goes to the old one. Ask the keyboard instead of
     // waiting for it, or the key stays "held" and later presses are ignored.
     for (auto key = app.localKeys_.begin(); key != app.localKeys_.end();)
       key = Fl::get_key(*key) ? std::next(key) : app.localKeys_.erase(key);
+  }
+  // Ends the program after a termination signal by closing every window, which
+  // also ends an open dialog and then the event loop. The sessions are stopped
+  // once the loop has returned: one of them may be the dialog's owner. Like the
+  // signal's default action, this does not save the workspace again.
+  void terminate() {
+    auto now = std::chrono::steady_clock::now();
+    if (!terminating_) {
+      terminating_ = true; terminateBy_ = now + std::chrono::seconds(1);
+      while (Fl_Window* window = Fl::first_window()) window->hide();
+    } else if (now >= terminateBy_) {
+      // Something that does not end with its window, such as an open menu, is still running.
+      std::_Exit(1);
+    }
   }
   Tile* addTile(const Panel& panel) {
     Fl_Group* previous = Fl_Group::current();
@@ -1174,7 +1200,8 @@ private:
   Choice *layouts_, *preset_;
   GridGeometry grid_;
   std::vector<Divider*> dividers_;
-  bool presentation_ = false, transitioning_ = false;
+  bool presentation_ = false, transitioning_ = false, terminating_ = false;
+  std::chrono::steady_clock::time_point terminateBy_;
   Rect windowed_{};
   std::set<int> localKeys_;
 };
@@ -1391,8 +1418,17 @@ int runDashboard(const char* configPath)
       }
 #endif
     dashboard::Dashboard window(std::move(library), path);
+#ifdef SIGHUP
+    std::signal(SIGHUP, dashboard::noteTermination);
+#endif
+    std::signal(SIGINT, dashboard::noteTermination);
+    std::signal(SIGTERM, dashboard::noteTermination);
     window.show(); window.start();
-    return Fl::run();
+    int result = Fl::run();
+    if (!dashboard::terminationSignal) return result;
+    // Release keys and buttons held on the panels before the connections close.
+    window.stop();
+    return 1;
   } catch (const std::exception& error) {
     fl_alert("Cannot open the panel workspace: %s", error.what());
     return 1;
