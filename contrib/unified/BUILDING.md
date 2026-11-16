@@ -11,9 +11,13 @@ In an [MSYS2](https://www.msys2.org/) **MINGW64** shell:
 pacman -Syu
 # Restart the shell if the runtime update requests it, then run pacman -Syu again.
 pacman -S --needed make mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake \
-  mingw-w64-x86_64-ninja mingw-w64-x86_64-fltk1.3 \
+  mingw-w64-x86_64-ninja \
   mingw-w64-x86_64-libjpeg-turbo mingw-w64-x86_64-gnutls \
   mingw-w64-x86_64-pixman mingw-w64-x86_64-gtest mingw-w64-x86_64-sqlite3
+# MSYS2 no longer offers FLTK 1.3 for MINGW64. Install its last build from the
+# MSYS2 server; pacman verifies the signature.
+pacman -U --needed \
+  https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-fltk1.3-1.3.11-2-any.pkg.tar.zst
 
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_VIEWER=ON -DENABLE_GNUTLS=ON -DENABLE_NETTLE=OFF \
