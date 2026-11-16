@@ -111,9 +111,10 @@ public:
   Button(int x, int y, int w, int h, const char* text, bool primary = false)
     : Fl_Button(x, y, w, h, text), primary_(primary) { box(FL_NO_BOX); }
   void theme(const Palette& colors, Fl_Color background) { colors_ = colors; background_ = background; redraw(); }
+  void tint(Fl_Color color) { tint_ = color; redraw(); }
   void draw() override {
     fl_color(background_); fl_rectf(x(), y(), w(), h());
-    Fl_Color fill = primary_ ? fl_rgb_color(37, 99, 235) : colors_.card;
+    Fl_Color fill = primary_ ? tint_ : colors_.card;
     if (!active_r()) fill = colors_.soft;
     else if (value()) fill = fl_color_average(fill, colors_.text, 0.85f);
     else if (hover_) fill = fl_color_average(fill, primary_ ? FL_WHITE : colors_.accent, 0.92f);
@@ -130,7 +131,7 @@ private:
   bool primary_;
   bool hover_ = false;
   Palette colors_ = palette(false);
-  Fl_Color background_ = palette(false).background;
+  Fl_Color background_ = palette(false).background, tint_ = fl_rgb_color(37, 99, 235);
 };
 
 class Checkbox : public Fl_Check_Button {
@@ -589,7 +590,9 @@ public:
     begin();
     add_ = new Button(0, 0, 132, 38, "+ Add panel", true);
     back_ = new Button(0, 0, 84, 30, "Overview"); back_->hide();
-    actions_ = new Button(0, 0, 30, 30, "..."); actions_->tooltip("Workspace actions and appearance");
+    actions_ = new Button(0, 0, 30, 30, "...");
+    // Green sets the notice apart from the actions; white text stays readable on it.
+    update_ = new Button(0, 0, 120, 30, "", true); update_->tint(fl_rgb_color(21, 128, 61)); update_->hide();
     full_ = new Button(0, 0, 108, 30, "Full screen"); full_->tooltip("Screens only (F11). Exit with F11 or Esc.");
     layouts_ = new Choice(0, 0, 254, 32);
     layouts_->tooltip("Open and connect a saved layout");
@@ -610,6 +613,7 @@ public:
     add_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->edit(nullptr); }, this);
     back_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->focusTile(nullptr); }, this);
     actions_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->workspaceMenu(); }, this);
+    update_->callback([](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->openUpdates(); }, this);
     auto toggle = [](Fl_Widget*, void* data) { static_cast<Dashboard*>(data)->toggleFullScreen(); };
     full_->callback(toggle, this); exitFull_->callback(toggle, this);
     layouts_->callback([](Fl_Widget*, void* data) {
@@ -630,7 +634,8 @@ public:
     }, this);
     for (const auto& panel : workspace_.panels) addTile(panel);
     windowed_ = {x(), y(), w(), h()};
-    updateLayouts(); applyTheme(); arrange();
+    // An update found by an earlier run is announced as soon as the window opens.
+    updateLayouts(); applyTheme(); updateNotice(); arrange();
     Fl::add_timeout(0.05, tick, this);
     Fl::add_timeout(1.0, updateTick, this);
   }
@@ -784,10 +789,10 @@ public:
         fl_rect(9, 13, 5, 5); fl_rect(18, 13, 5, 5);
         fl_rect(9, 22, 5, 5); fl_rect(18, 22, 5, 5);
         int live = 0; for (auto* tile : tiles_) live += tile->session.live();
-        int left = focused_ ? 700 : 606;
-        if (w() - 164 - left >= 100)
+        int left = focused_ ? 700 : 606, right = update_->visible() ? update_->x() - 8 : w() - 164;
+        if (right - left >= 100)
           caption(std::to_string(live) + " / " + std::to_string(tiles_.size()) + " connected",
-                  left, 5, w() - 164 - left, 30, p.muted, 11, false, FL_ALIGN_RIGHT);
+                  left, 5, right - left, 30, p.muted, 11, false, FL_ALIGN_RIGHT);
       }
     }
     draw_children();
@@ -806,9 +811,25 @@ private:
     auto& app = *static_cast<Dashboard*>(data);
     Fl::repeat_timeout(1.0, updateTick, data);
     app.updater_.poll();
-    bool available = app.updater_.available();
-    app.actions_->copy_label(available ? "!" : "...");
-    app.actions_->tooltip(available ? "An update is available. Open Updates to download and install." : "Workspace actions, appearance and updates");
+    if (app.updateNotice()) app.arrange();
+  }
+  // Takes over what the updater has to announce. Returns true when it changed.
+  bool updateNotice() {
+    auto notice = updater_.notice();
+    if (notice.label == notice_.label && notice.tooltip == notice_.tooltip) return false;
+    notice_ = std::move(notice);
+    update_->copy_tooltip(notice_.tooltip.c_str());
+    return true;
+  }
+  void openUpdates() {
+    releaseInput();
+    UpdateDialog dialog(updater_, colors());
+    bool install = dialog.run() && save();
+    if (updateNotice()) arrange();
+    if (!install) return;
+    if (!updater_.install()) { fl_alert("%s", updater_.message().c_str()); return; }
+    for (auto* tile : tiles_) tile->session.stop();
+    hide();
   }
   static void tick(void* data) {
     auto& app = *static_cast<Dashboard*>(data);
@@ -993,14 +1014,8 @@ private:
     else if (action == 2) resetDividers();
     else if (action == 3) { workspace_.dark = !workspace_.dark; applyTheme(); save(); }
     else if (action == 4) toggleCertificates();
-    else if (action == 9) {
-      UpdateDialog dialog(updater_, colors());
-      if (dialog.run() && save()) {
-        if (!updater_.install()) { fl_alert("%s", updater_.message().c_str()); return; }
-        for (auto* tile : tiles_) tile->session.stop();
-        hide();
-      }
-    } else {
+    else if (action == 9) openUpdates();
+    else {
       workspace_.columns = action - 4;
       for (auto* tile : tiles_) tile->panel.columns = tile->panel.rows = 1;
       choosePreset(Preset::CustomGrid);
@@ -1028,7 +1043,7 @@ private:
     // FLTK's shared name/password/certificate dialogs use the standard boxes.
     Fl::set_boxtype(FL_UP_BOX, dialogButtonBox, 2, 2, 4, 4);
     Fl::set_boxtype(FL_DOWN_BOX, dialogButtonBox, 2, 2, 4, 4);
-    for (auto* button : {add_, libraryMenu_, back_, actions_, full_}) button->theme(p, p.card);
+    for (auto* button : {add_, libraryMenu_, back_, actions_, full_, update_}) button->theme(p, p.card);
     exitFull_->theme(palette(true), fl_rgb_color(13, 22, 35));
     for (auto* choice : {preset_, layouts_}) choice->theme(p, p.card);
     redraw();
@@ -1043,6 +1058,23 @@ private:
     add_->resize(418, 5, 94, 30); libraryMenu_->resize(518, 5, 76, 30);
     back_->resize(600, 5, 84, 30); full_->resize(w() - 150, 5, 108, 30);
     actions_->resize(w() - 36, 5, 30, 30); exitFull_->resize(w() - 36, 6, 30, 24);
+    // A pending update is announced beside the full screen button, in fewer
+    // words in a narrow window. Where the toolbar has no room for either, the
+    // actions button carries the mark instead.
+    fl_font(FL_HELVETICA_BOLD, 13);
+    const int room = w() - 156 - (focused_ ? 690 : 600);
+    const std::string* text = nullptr;
+    for (const std::string* wording : {&notice_.label, &notice_.brief})
+      if (!text && !wording->empty() && static_cast<int>(fl_width(wording->c_str())) + 28 <= room) text = wording;
+    bool announced = text && !presentation_;
+    if (announced) {
+      int width = static_cast<int>(fl_width(text->c_str())) + 28;
+      if (*text != update_->label()) update_->copy_label(text->c_str());
+      update_->resize(w() - 156 - width, 5, width, 30); update_->show();
+    } else update_->hide();
+    bool marked = !notice_.label.empty() && !announced;
+    actions_->copy_label(marked ? "!" : "...");
+    actions_->tooltip(marked ? "An update is waiting. Open Updates to download and install." : "Workspace actions, appearance and updates");
     int oldX = std::max(0, scroll_->xposition()), oldY = std::max(0, scroll_->yposition());
     scroll_->scroll_to(0, 0);
     if (presentation_) scroll_->resize(0, 0, w(), h());
@@ -1137,7 +1169,8 @@ private:
   Tile *focused_ = nullptr, *selected_ = nullptr;
   Fl_Scroll* scroll_ = nullptr;
   Fl_Box* anchor_;
-  Button *add_, *back_, *actions_, *full_, *exitFull_, *libraryMenu_;
+  Button *add_, *back_, *actions_, *full_, *exitFull_, *libraryMenu_, *update_;
+  AppUpdate::Notice notice_;
   Choice *layouts_, *preset_;
   GridGeometry grid_;
   std::vector<Divider*> dividers_;

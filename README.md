@@ -259,8 +259,11 @@ SmartServer passwords. Monitor-only access can also be imposed by the panel.
 
 ## Releases and updates
 
-Windows portable releases check GitHub automatically at most once a day. The
-workspace's **...** button shows **!** when an update is available. Open
+Windows portable releases check GitHub automatically at most once a day. When
+an update is available, a green **Update available** button appears in the
+toolbar beside **Full screen**, also the next time the app starts. Nothing opens
+by itself. In a window too narrow for it, the button reads **Update**, or the
+**...** button shows **!** instead. Click the button, or open
 **... > Updates...**, choose **Download update**, and choose **Install and
 restart** when convenient. Downloading keeps panels connected. Installation
 saves the layout, closes the app, updates its managed files and restarts it with

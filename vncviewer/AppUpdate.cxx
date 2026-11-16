@@ -92,6 +92,15 @@ bool AppUpdate::busy() const {
   return state_ == State::Checking || state_ == State::Downloading || state_ == State::Installing;
 }
 void AppUpdate::fail(const std::string& message) { state_ = State::Error; message_ = message; }
+AppUpdate::Notice AppUpdate::notice() const {
+  const std::string release = version_.empty() ? "A new release" : "SuperSmartClient " + version_;
+  switch (state_) {
+    case State::Available: return {"Update available", "Update", release + " is available. Click to download it."};
+    case State::Downloading: return {"Downloading update...", "Updating", release + " is downloading. Your panels stay connected."};
+    case State::Ready: return {"Install update", "Install", release + " is downloaded. Click to install it and restart."};
+    default: return {};
+  }
+}
 void AppUpdate::automatic(bool enabled) {
   std::filesystem::create_directories(work_);
   std::ofstream output(work_ / "automatic.txt", std::ios::trunc);

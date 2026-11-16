@@ -26,6 +26,11 @@ public:
   bool automatic() const { return automatic_ && allowAutomatic_; }
   bool busy() const;
   bool available() const { return state_ == State::Available || state_ == State::Ready; }
+  // What the workspace shows about a pending update: a label, the same in
+  // fewer words for a narrow toolbar, and an explanation. All are empty when
+  // there is nothing to act on.
+  struct Notice { std::string label, brief, tooltip; };
+  Notice notice() const;
   void automatic(bool enabled);
   void poll();
   void check();

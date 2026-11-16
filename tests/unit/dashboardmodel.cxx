@@ -455,6 +455,12 @@ TEST_F(DashboardModel, UpdateVersionsCompareNumericallyAndRejectInvalidReleases)
   for (auto invalid : {"", "1.0", "1.0.0.1", "01.0.0", "ssc-v1.0.0", "1.0.0-beta", "1.0.0\n", "1.0.0;cmd", "99999999999.0.0"})
     EXPECT_THROW(newerVersion(invalid, "1.0.0"), std::invalid_argument);
 }
+TEST_F(DashboardModel, NothingIsAnnouncedWithoutAPendingUpdate) {
+  AppUpdate updater(directory / "test layouts.db", true, directory);
+  EXPECT_FALSE(updater.supported());
+  EXPECT_TRUE(updater.notice().label.empty());
+  EXPECT_TRUE(updater.notice().tooltip.empty());
+}
 #ifdef _WIN32
 TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPreference) {
   const std::string candidate = std::to_string(std::stoi(SUPERSMART_VERSION) + 1) + ".0.0";
@@ -473,6 +479,7 @@ TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPr
   EXPECT_FALSE(updater.automatic());
   updater.check();
   ASSERT_EQ(updater.state(), AppUpdate::State::Checking);
+  EXPECT_TRUE(updater.notice().label.empty());
   auto finish = [&] {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (updater.busy() && std::chrono::steady_clock::now() < deadline) {
@@ -482,13 +489,23 @@ TEST_F(DashboardModel, UpdateHelperRunsInBackgroundWithUnicodePathsAndPersistsPr
   finish();
   ASSERT_EQ(updater.state(), AppUpdate::State::Available) << updater.message();
   EXPECT_EQ(updater.version(), candidate);
-  updater.download(); finish();
+  EXPECT_EQ(updater.notice().label, "Update available");
+  EXPECT_EQ(updater.notice().brief, "Update");
+  EXPECT_NE(updater.notice().tooltip.find("SuperSmartClient " + candidate), std::string::npos);
+  updater.download();
+  EXPECT_EQ(updater.notice().label, "Downloading update...");
+  finish();
   ASSERT_EQ(updater.state(), AppUpdate::State::Ready) << updater.message();
+  EXPECT_EQ(updater.notice().label, "Install update");
   AppUpdate restored(directory / "test layouts.db", true, app);
   EXPECT_FALSE(restored.automatic());
   EXPECT_EQ(restored.state(), AppUpdate::State::Ready);
+  // A later start announces the downloaded release without checking again.
+  EXPECT_EQ(restored.notice().label, "Install update");
+  EXPECT_NE(restored.notice().tooltip.find(candidate), std::string::npos);
   ASSERT_TRUE(updater.install()); finish();
   EXPECT_EQ(updater.state(), AppUpdate::State::Current) << updater.message();
+  EXPECT_TRUE(updater.notice().label.empty());
   EXPECT_TRUE(std::filesystem::exists(directory / ".supersmart-updates/restart-fixture.txt"));
   EXPECT_EQ(contents(directory / ".supersmart-updates/config-fixture.txt"), (directory / "test layouts.db").u8string());
 }
